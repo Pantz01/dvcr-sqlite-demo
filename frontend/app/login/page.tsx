@@ -1,26 +1,44 @@
 'use client'
-import { useRouter } from 'next/navigation'
+import { useState } from 'react'
+import { API } from '@/lib/api'
 
 export default function Login() {
-  const router = useRouter()
-  const users = [
-    { id: 1, name: 'Alice Driver' },
-    { id: 2, name: 'Manny Manager' },
-    { id: 3, name: 'Mec McWrench' },
-  ]
+  const [email, setEmail] = useState('manager@example.com')
+  const [password, setPassword] = useState('password123')
+  const [busy, setBusy] = useState(false)
+
+  async function doLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    try {
+      const r = await fetch(`${API}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      })
+      if (!r.ok) {
+        const msg = await r.text().catch(()=>'Login failed')
+        alert(msg || 'Login failed')
+        return
+      }
+      const data = await r.json()
+      localStorage.setItem('token', data.access_token)
+      localStorage.setItem('user', JSON.stringify(data.user))
+      window.location.href = '/trucks'
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <main className="p-6 max-w-md mx-auto space-y-4">
-      <h1 className="text-2xl font-bold">Sign in (MVP)</h1>
-      <p className="text-sm text-gray-600">Select a demo user. Real auth comes later.</p>
-      <div className="grid gap-2">
-        {users.map(u => (
-          <button key={u.id} className="border rounded-xl p-3 hover:bg-gray-50"
-            onClick={() => { localStorage.setItem('x-user-id', String(u.id)); router.push('/trucks'); }}>
-            Continue as {u.name}
-          </button>
-        ))}
-      </div>
+      <h1 className="text-2xl font-bold">Sign in</h1>
+      <form onSubmit={doLogin} className="grid gap-2">
+        <input className="border p-2 rounded-xl" value={email} onChange={e=>setEmail(e.target.value)} placeholder="Email" />
+        <input className="border p-2 rounded-xl" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="Password" />
+        <button className="border rounded-xl p-2" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
+      </form>
+      <p className="text-xs text-gray-600">Try: manager@example.com, driver@example.com, mechanic@example.com — password: password123</p>
     </main>
   )
 }
