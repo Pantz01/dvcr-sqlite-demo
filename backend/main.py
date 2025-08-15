@@ -17,16 +17,26 @@ UPLOAD_DIR = os.getenv("DVCR_UPLOAD_DIR", "uploads")
 ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000", "https://resourceful-compassion-production.up.railway.app",]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
+# ---- create FastAPI app FIRST ----
+app = FastAPI(title="DVCR API")
+
+# ---- then add middleware / mounts ----
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.up\.railway\.app",  # allows your Railway frontend subdomain(s)
+    allow_origin_regex=r"https://.*\.up\.railway\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
+# ---- then the DB setup / models, etc. ----
+engine = create_engine(
+    DB_URL,
+    connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
