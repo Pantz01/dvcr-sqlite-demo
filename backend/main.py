@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 
 DB_URL = os.getenv("DVCR_DB", "sqlite:///./dvcr.db")
 UPLOAD_DIR = os.getenv("DVCR_UPLOAD_DIR", "uploads")
-ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000", "https://<your-frontend>.up.railway.app",]
+ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000", "https://resourceful-compassion-production.up.railway.app",]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
