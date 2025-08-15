@@ -1,9 +1,9 @@
 import './globals.css'
-import React from 'react'
+import Topbar from '@/components/Topbar'
 
 export const metadata = {
   title: 'DVCR',
-  description: 'Driver Vehicle Condition Report',
+  description: 'Driver Vehicle Condition Reports'
 }
 // inside <body> or header area
 <button
@@ -12,11 +12,13 @@ export const metadata = {
 >
   Logout
 </button>
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-white text-gray-900">{children}</body>
+      <body>
+        <Topbar />
+        {children}
+      </body>
     </html>
   )
 }
