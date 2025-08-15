@@ -1,14 +1,20 @@
 'use client'
 import { useEffect, useState } from 'react'
+import RequireAuth from '@/components/RequireAuth'
+import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders, getUser } from '@/lib/api'
-import { RequireAuth, RoleGuard } from '@/components/guards'
 
-type UserRow = { id:number; name:string; email:string; role:'driver'|'mechanic'|'manager'|'admin' }
+type UserRow = {
+  id: number
+  name: string
+  email: string
+  role: 'driver' | 'mechanic' | 'manager' | 'admin'
+}
 
 export default function AdminPage() {
   return (
     <RequireAuth>
-      <RoleGuard roles={['manager','admin']}>
+      <RoleGuard roles={['manager', 'admin']}>
         <AdminInner />
       </RoleGuard>
     </RequireAuth>
@@ -22,12 +28,12 @@ function AdminInner() {
 
   async function loadUsers() {
     const r = await fetch(`${API}/users`, { headers: authHeaders() })
-    if (!r.ok) { alert('Cannot load users'); return }
+    if (!r.ok) { alert(await r.text().catch(()=> 'Failed to load users')); return }
     setUsers(await r.json())
   }
   useEffect(() => { loadUsers() }, [])
 
-  async function createUser(e: any) {
+  async function createUser(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setBusy(true)
     const fd = new FormData(e.currentTarget)
@@ -62,6 +68,7 @@ function AdminInner() {
     const p = prompt(`New password for ${u.email}:`, 'password123')
     if (!p) return
     await patchUser(u, { password: p } as any)
+    alert('Password updated.')
   }
 
   async function removeUser(u: UserRow) {
@@ -83,38 +90,38 @@ function AdminInner() {
           <div className="font-semibold">Trucks</div>
           <div className="text-sm text-gray-600">Manage fleet & reports</div>
         </a>
-        <a href="/users" className="p-4 border rounded-2xl hover:bg-gray-50">
-          <div className="font-semibold">Users (full page)</div>
-          <div className="text-sm text-gray-600">Advanced user management</div>
-        </a>
         <a href="/reports" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Reports</div>
           <div className="text-sm text-gray-600">Browse DVCR history</div>
         </a>
+        <a href="/admin" className="p-4 border rounded-2xl hover:bg-gray-50">
+          <div className="font-semibold">Users</div>
+          <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
+        </a>
       </div>
 
-      {/* Quick create user inline */}
+      {/* Quick Add User */}
       <section className="border rounded-2xl p-4 space-y-3">
         <div className="font-semibold">Quick Add User</div>
         <form onSubmit={createUser} className="grid sm:grid-cols-5 gap-2">
-          <input name="name" placeholder="Name" className="border p-2 rounded-xl" required/>
-          <input name="email" placeholder="Email" className="border p-2 rounded-xl" required/>
+          <input name="name" placeholder="Name" className="border p-2 rounded-xl" required />
+          <input name="email" placeholder="Email" className="border p-2 rounded-xl" required />
           <select name="role" className="border p-2 rounded-xl">
             <option value="driver">driver</option>
             <option value="mechanic">mechanic</option>
             <option value="manager">manager</option>
             <option value="admin">admin</option>
           </select>
-          <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl"/>
-          <button disabled={busy} className="border p-2 rounded-xl">{busy ? 'Adding…' : 'Add'}</button>
+          <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl" />
+          <button disabled={busy} className="border rounded-xl p-2">{busy ? 'Adding…' : 'Add'}</button>
         </form>
       </section>
 
-      {/* Inline user table (lightweight) */}
+      {/* Users Table */}
       <section className="border rounded-2xl p-4">
         <div className="font-semibold mb-2">Users</div>
         <div className="overflow-auto">
-          <table className="min-w-[640px] w-full">
+          <table className="min-w-[700px] w-full">
             <thead>
               <tr className="bg-gray-50">
                 <th className="text-left p-2">Name</th>
@@ -126,11 +133,27 @@ function AdminInner() {
             <tbody>
               {users.map(u => (
                 <tr key={u.id} className="border-t">
-                  <td className="p-2"><input defaultValue={u.name} className="border p-1 rounded" onBlur={(e)=>patchUser(u,{name:e.target.value})}/></td>
-                  <td className="p-2"><input defaultValue={u.email} className="border p-1 rounded" onBlur={(e)=>patchUser(u,{email:e.target.value})}/></td>
                   <td className="p-2">
-                    <select defaultValue={u.role} className="border p-1 rounded" onChange={(e)=>patchUser(u,{role:e.target.value as any})}>
-                      {['driver','mechanic','manager','admin'].map(r=><option key={r} value={r}>{r}</option>)}
+                    <input
+                      defaultValue={u.name}
+                      className="border p-1 rounded"
+                      onBlur={(e)=>patchUser(u,{ name: e.target.value })}
+                    />
+                  </td>
+                  <td className="p-2">
+                    <input
+                      defaultValue={u.email}
+                      className="border p-1 rounded"
+                      onBlur={(e)=>patchUser(u,{ email: e.target.value })}
+                    />
+                  </td>
+                  <td className="p-2">
+                    <select
+                      defaultValue={u.role}
+                      className="border p-1 rounded"
+                      onChange={(e)=>patchUser(u,{ role: e.target.value as UserRow['role'] })}
+                    >
+                      {['driver','mechanic','manager','admin'].map(r => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </td>
                   <td className="p-2 space-x-2">
@@ -140,7 +163,9 @@ function AdminInner() {
                 </tr>
               ))}
               {users.length === 0 && (
-                <tr><td colSpan={4} className="p-2 text-sm text-gray-500">No users yet.</td></tr>
+                <tr>
+                  <td colSpan={4} className="p-2 text-sm text-gray-500">No users yet.</td>
+                </tr>
               )}
             </tbody>
           </table>
