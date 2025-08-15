@@ -21,6 +21,7 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://resourceful-compassion-production.up.railway.app",
+    # add your frontend URL(s) here if different, e.g. "https://<your-frontend>.up.railway.app"
 ]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -52,7 +53,7 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     role = Column(String, nullable=False)  # driver | manager | mechanic | admin
-    password_hash = Column(String, nullable=True)  # new
+    password_hash = Column(String, nullable=True)
 
 class Truck(Base):
     __tablename__ = "trucks"
@@ -60,7 +61,7 @@ class Truck(Base):
     number = Column(String, unique=True, index=True, nullable=False)
     vin = Column(String, nullable=True)
     active = Column(Boolean, default=True)
-    odometer = Column(Integer, default=0)  # new
+    odometer = Column(Integer, default=0)
     reports = relationship("Report", back_populates="truck")
     services = relationship("ServiceRecord", back_populates="truck")
 
@@ -157,7 +158,7 @@ async def require_user(request: Request, db: Session = Depends(get_db)) -> User:
         except Exception:
             raise HTTPException(status_code=401, detail="Invalid token")
 
-    # Back-compat demo header
+    # Back-compat demo header (kept for old frontend calls)
     user_id = request.headers.get("x-user-id")
     if user_id:
         user = db.get(User, int(user_id))
@@ -282,6 +283,19 @@ class ServiceIn(BaseModel):
     odometer: int
     notes: Optional[str] = None
 
+# ---- NEW: User admin schemas ----
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    role: str  # 'driver' | 'mechanic' | 'manager' | 'admin'
+    password: str
+
+class UserPatch(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    password: Optional[str] = None
+
 # ----------------- Routes -----------------
 @app.post("/auth/login", response_model=LoginOut)
 def login(payload: LoginIn, db: Session = Depends(get_db)):
@@ -295,6 +309,63 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 async def me(user: User = Depends(require_user)):
     return user
 
+# ---- NEW: Users admin endpoints ----
+@app.get("/users", response_model=List[UserOut])
+def users_list(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["manager", "admin"])
+    return db.query(User).order_by(User.name).all()
+
+@app.post("/users", response_model=UserOut)
+def users_create(payload: UserCreate, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["manager", "admin"])
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(400, "Email already exists")
+    new_user = User(
+        name=payload.name,
+        email=payload.email,
+        role=payload.role,
+        password_hash=bcrypt.hash(payload.password),
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+@app.patch("/users/{uid}", response_model=UserOut)
+def users_patch(uid: int, payload: UserPatch, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["manager", "admin"])
+    u = db.get(User, uid)
+    if not u:
+        raise HTTPException(404, "User not found")
+
+    if payload.email and payload.email != u.email:
+        if db.query(User).filter(User.email == payload.email).first():
+            raise HTTPException(400, "Email already exists")
+        u.email = payload.email
+
+    if payload.name is not None:
+        u.name = payload.name
+    if payload.role is not None:
+        u.role = payload.role
+    if payload.password:
+        u.password_hash = bcrypt.hash(payload.password)
+
+    db.commit()
+    db.refresh(u)
+    return u
+
+@app.delete("/users/{uid}", status_code=204)
+def users_delete(uid: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["manager", "admin"])
+    u = db.get(User, uid)
+    if not u:
+        return
+    if u.id == user.id:
+        raise HTTPException(400, "Refusing to delete your own account")
+    db.delete(u)
+    db.commit()
+
+# ---- Trucks / Reports / Notes / Defects ----
 @app.get("/trucks", response_model=List[TruckOut])
 def list_trucks(db: Session = Depends(get_db)):
     return db.query(Truck).order_by(Truck.number).all()
@@ -452,4 +523,3 @@ def list_service(truck_id: int, user: User = Depends(require_user), db: Session 
 @app.get("/health")
 def health():
     return {"ok": True}
-
