@@ -1,6 +1,5 @@
-import os
-import shutil
-from datetime import datetime
+import os, shutil
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
@@ -12,16 +11,22 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 
+# ----------------- Config / Env -----------------
 DB_URL = os.getenv("DVCR_DB", "sqlite:///./dvcr.db")
 UPLOAD_DIR = os.getenv("DVCR_UPLOAD_DIR", "uploads")
-ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000", "https://resourceful-compassion-production.up.railway.app",]
+JWT_SECRET = os.getenv("DVCR_JWT_SECRET", "dev-secret-change-me")
+JWT_EXPIRE_MINUTES = int(os.getenv("DVCR_JWT_EXPIRE_MINUTES", "43200"))  # 30 days
+
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://resourceful-compassion-production.up.railway.app",
+]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
-# ---- create FastAPI app FIRST ----
+# ----------------- App -----------------
 app = FastAPI(title="DVCR API")
 
-# ---- then add middleware / mounts ----
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -32,7 +37,7 @@ app.add_middleware(
 )
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
-# ---- then the DB setup / models, etc. ----
+# ----------------- DB -----------------
 engine = create_engine(
     DB_URL,
     connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {}
@@ -40,12 +45,14 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# ----------------- Models -----------------
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
-    role = Column(String, nullable=False)
+    role = Column(String, nullable=False)  # driver | manager | mechanic | admin
+    password_hash = Column(String, nullable=True)  # new
 
 class Truck(Base):
     __tablename__ = "trucks"
@@ -53,7 +60,9 @@ class Truck(Base):
     number = Column(String, unique=True, index=True, nullable=False)
     vin = Column(String, nullable=True)
     active = Column(Boolean, default=True)
+    odometer = Column(Integer, default=0)  # new
     reports = relationship("Report", back_populates="truck")
+    services = relationship("ServiceRecord", back_populates="truck")
 
 class Report(Base):
     __tablename__ = "reports"
@@ -64,6 +73,7 @@ class Report(Base):
     odometer = Column(Integer, nullable=True)
     status = Column(String, default="OPEN")
     summary = Column(Text, nullable=True)
+    type = Column(String, default="pre")  # 'pre' | 'post'
     truck = relationship("Truck", back_populates="reports")
     driver = relationship("User")
     defects = relationship("Defect", back_populates="report", cascade="all, delete-orphan")
@@ -103,14 +113,89 @@ class Note(Base):
     report = relationship("Report", back_populates="notes")
     author = relationship("User")
 
+class ServiceRecord(Base):
+    __tablename__ = "service_records"
+    id = Column(Integer, primary_key=True)
+    truck_id = Column(Integer, ForeignKey("trucks.id"), nullable=False)
+    service_type = Column(String, nullable=False)  # 'oil' | 'chassis'
+    odometer = Column(Integer, nullable=False)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    truck = relationship("Truck", back_populates="services")
+
 Base.metadata.create_all(bind=engine)
 
+# ----------------- Auth helpers -----------------
+import jwt
+from passlib.hash import bcrypt
+
+def make_token(user_id: int) -> str:
+    exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    return jwt.encode({"sub": str(user_id), "exp": exp}, JWT_SECRET, algorithm="HS256")
+
+def decode_token(token: str) -> int:
+    data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    return int(data["sub"])
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+async def require_user(request: Request, db: Session = Depends(get_db)) -> User:
+    # Prefer JWT
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        try:
+            uid = decode_token(token)
+            user = db.get(User, uid)
+            if user:
+                return user
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Back-compat demo header
+    user_id = request.headers.get("x-user-id")
+    if user_id:
+        user = db.get(User, int(user_id))
+        if user:
+            return user
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+def require_role(user: 'User', roles: List[str]):
+    if user.role not in roles:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+# ----------------- Seed demo users/trucks -----------------
+with SessionLocal() as db:
+    if db.query(User).count() == 0:
+        db.add_all([
+            User(name="Alice Driver", email="driver@example.com", role="driver",
+                 password_hash=bcrypt.hash("password123")),
+            User(name="Manny Manager", email="manager@example.com", role="manager",
+                 password_hash=bcrypt.hash("password123")),
+            User(name="Mec McWrench", email="mechanic@example.com", role="mechanic",
+                 password_hash=bcrypt.hash("password123")),
+        ])
+        if db.query(Truck).count() == 0:
+            db.add_all([
+                Truck(number="78014", vin="VIN78014", odometer=18000),
+                Truck(number="78988", vin="VIN78988", odometer=9500),
+            ])
+        db.commit()
+
+# ----------------- Schemas -----------------
 class UserOut(BaseModel):
     id: int
     name: str
     email: str
     role: str
-    class Config: orm_mode = True
+    class Config:
+        from_attributes = True  # pydantic v2
 
 class TruckIn(BaseModel):
     number: str
@@ -119,13 +204,16 @@ class TruckIn(BaseModel):
 
 class TruckOut(TruckIn):
     id: int
-    class Config: orm_mode = True
+    odometer: int
+    class Config:
+        from_attributes = True
 
 class PhotoOut(BaseModel):
     id: int
     path: str
     caption: Optional[str]
-    class Config: orm_mode = True
+    class Config:
+        from_attributes = True
 
 class DefectIn(BaseModel):
     component: str
@@ -140,7 +228,8 @@ class DefectOut(DefectIn):
     resolved_by_id: Optional[int] = None
     resolved_at: Optional[datetime] = None
     photos: List[PhotoOut] = []
-    class Config: orm_mode = True
+    class Config:
+        from_attributes = True
 
 class NoteIn(BaseModel):
     text: str
@@ -150,11 +239,13 @@ class NoteOut(BaseModel):
     author: UserOut
     text: str
     created_at: datetime
-    class Config: orm_mode = True
+    class Config:
+        from_attributes = True
 
 class ReportIn(BaseModel):
     odometer: Optional[int] = None
     summary: Optional[str] = None
+    type: str = "pre"  # 'pre' | 'post'
 
 class ReportOut(BaseModel):
     id: int
@@ -164,62 +255,41 @@ class ReportOut(BaseModel):
     odometer: Optional[int]
     status: str
     summary: Optional[str]
+    type: str
     defects: List[DefectOut] = []
     notes: List[NoteOut] = []
-    class Config: orm_mode = True
-
-from fastapi import FastAPI
-app = FastAPI(title="DVCR API")
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-from fastapi.staticfiles import StaticFiles
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-async def require_user(request: Request, db: Session = Depends(get_db)) -> User:
-    user_id = request.headers.get("x-user-id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing x-user-id header (MVP auth)")
-    user = db.get(User, int(user_id))
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-def require_role(user: 'User', roles: List[str]):
-    if user.role not in roles:
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-with SessionLocal() as db:
-    if db.query(User).count() == 0:
-        db.add_all([
-            User(name="Alice Driver", email="driver@example.com", role="driver"),
-            User(name="Manny Manager", email="manager@example.com", role="manager"),
-            User(name="Mec McWrench", email="mechanic@example.com", role="mechanic"),
-        ])
-        if db.query(Truck).count() == 0:
-            db.add_all([Truck(number="78014", vin="VIN78014"), Truck(number="78988", vin="VIN78988")])
-        db.commit()
+    class Config:
+        from_attributes = True
 
 class LoginIn(BaseModel):
     email: str
+    password: str
 
-@app.post("/auth/login", response_model=UserOut)
+class LoginOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+class PMStatus(BaseModel):
+    odometer: int
+    oil_next_due: int
+    oil_miles_remaining: int
+    chassis_next_due: int
+    chassis_miles_remaining: int
+
+class ServiceIn(BaseModel):
+    service_type: str  # 'oil' | 'chassis'
+    odometer: int
+    notes: Optional[str] = None
+
+# ----------------- Routes -----------------
+@app.post("/auth/login", response_model=LoginOut)
 def login(payload: LoginIn, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
-    if not user: raise HTTPException(401, "Unknown email")
-    return user
+    if not user or not user.password_hash or not bcrypt.verify(payload.password, user.password_hash):
+        raise HTTPException(401, "Invalid email or password")
+    token = make_token(user.id)
+    return {"access_token": token, "user": user}
 
 @app.get("/me", response_model=UserOut)
 async def me(user: User = Depends(require_user)):
@@ -231,7 +301,7 @@ def list_trucks(db: Session = Depends(get_db)):
 
 @app.post("/trucks", response_model=TruckOut)
 def create_truck(payload: TruckIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
-    require_role(user, ["manager"])
+    require_role(user, ["manager", "admin"])
     t = Truck(number=payload.number, vin=payload.vin, active=payload.active)
     db.add(t); db.commit(); db.refresh(t); return t
 
@@ -249,8 +319,12 @@ def list_reports(truck_id: int, db: Session = Depends(get_db)):
 def create_report(truck_id: int, payload: ReportIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
     truck = db.get(Truck, truck_id)
     if not truck: raise HTTPException(404, "Truck not found")
-    r = Report(truck_id=truck_id, driver_id=user.id, odometer=payload.odometer, summary=payload.summary)
-    db.add(r); db.commit(); db.refresh(r); return r
+    r = Report(truck_id=truck_id, driver_id=user.id, odometer=payload.odometer, summary=payload.summary, type=payload.type)
+    db.add(r)
+    # update truck odometer if report has a higher reading
+    if payload.odometer and (truck.odometer is None or payload.odometer > truck.odometer):
+        truck.odometer = payload.odometer
+    db.commit(); db.refresh(r); return r
 
 @app.get("/reports/{report_id}", response_model=ReportOut)
 def get_report(report_id: int, db: Session = Depends(get_db)):
@@ -270,7 +344,7 @@ def patch_report(report_id: int, payload: ReportPatch, user: User = Depends(requ
     r = db.get(Report, report_id)
     if not r: raise HTTPException(404, "Report not found")
     if payload.status is not None:
-        require_role(user, ["manager", "mechanic"])
+        require_role(user, ["manager", "mechanic", "admin"])
         r.status = payload.status
     if payload.summary is not None: r.summary = payload.summary
     if payload.odometer is not None: r.odometer = payload.odometer
@@ -300,7 +374,7 @@ def patch_defect(defect_id: int, payload: DefectPatch, user: User = Depends(requ
     if not d: raise HTTPException(404, "Defect not found")
     if payload.description is not None: d.description = payload.description
     if payload.resolved is not None:
-        require_role(user, ["mechanic", "manager"])
+        require_role(user, ["mechanic", "manager", "admin"])
         d.resolved = payload.resolved
         d.resolved_by_id = user.id if payload.resolved else None
         d.resolved_at = datetime.utcnow() if payload.resolved else None
@@ -322,5 +396,60 @@ async def upload_photos(defect_id: int, files: List[UploadFile] = File(...), cap
     for p in saved: db.refresh(p)
     return saved
 
+# ----------------- PM endpoints -----------------
+def pm_status_for(truck: Truck, db: Session) -> dict:
+    odom = truck.odometer or 0
+
+    last_oil = db.query(ServiceRecord).filter_by(truck_id=truck.id, service_type="oil")\
+        .order_by(ServiceRecord.odometer.desc()).first()
+    last_ch = db.query(ServiceRecord).filter_by(truck_id=truck.id, service_type="chassis")\
+        .order_by(ServiceRecord.odometer.desc()).first()
+
+    last_oil_mi = last_oil.odometer if last_oil else 0
+    last_ch_mi = last_ch.odometer if last_ch else 0
+
+    OIL_INTERVAL = 20000
+    CHASSIS_INTERVAL = 10000
+
+    def next_due(last_miles, interval):
+        base = (last_miles // interval + 1) * interval
+        return max(base, interval)
+
+    oil_next = next_due(last_oil_mi, OIL_INTERVAL)
+    chassis_next = next_due(last_ch_mi, CHASSIS_INTERVAL)
+
+    return {
+        "odometer": odom,
+        "oil_next_due": oil_next,
+        "oil_miles_remaining": max(oil_next - odom, 0),
+        "chassis_next_due": chassis_next,
+        "chassis_miles_remaining": max(chassis_next - odom, 0),
+    }
+
+@app.get("/trucks/{truck_id}/pm-next", response_model=PMStatus)
+def pm_next(truck_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    truck = db.get(Truck, truck_id)
+    if not truck: raise HTTPException(404, "Truck not found")
+    return pm_status_for(truck, db)
+
+@app.post("/trucks/{truck_id}/service", response_model=PMStatus)
+def add_service(truck_id: int, svc: ServiceIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if user.role not in ["manager", "mechanic", "admin"]:
+        raise HTTPException(403, "Insufficient permissions")
+    truck = db.get(Truck, truck_id)
+    if not truck: raise HTTPException(404, "Truck not found")
+    db.add(ServiceRecord(truck_id=truck_id, service_type=svc.service_type, odometer=svc.odometer, notes=svc.notes))
+    if svc.odometer and (truck.odometer is None or svc.odometer > truck.odometer):
+        truck.odometer = svc.odometer
+    db.commit()
+    return pm_status_for(truck, db)
+
+@app.get("/trucks/{truck_id}/service")
+def list_service(truck_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    return db.query(ServiceRecord).filter_by(truck_id=truck_id).order_by(ServiceRecord.created_at.desc()).all()
+
+# ----------------- Health -----------------
 @app.get("/health")
-def health(): return {"ok": True}
+def health():
+    return {"ok": True}
+
