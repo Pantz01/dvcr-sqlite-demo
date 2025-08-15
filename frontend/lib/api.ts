@@ -9,3 +9,9 @@ export function authHeaders() {
 export function jsonHeaders() {
   return { 'Content-Type': 'application/json', ...authHeaders() };
 }
+
+export function getUser() {
+  if (typeof window === 'undefined') return null;
+  try { return JSON.parse(localStorage.getItem('user') || 'null'); }
+  catch { return null; }
+}
