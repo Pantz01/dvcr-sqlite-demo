@@ -1,5 +1,5 @@
 'use client'
-const API = process.env.NEXT_PUBLIC_API!;
+const API = process.env.NEXT_PUBLIC_API as string;
 
 import { useEffect, useState } from 'react'
 
@@ -12,10 +12,11 @@ export default function TrucksPage() {
   }, [])
 
   async function createTruck(formData: FormData) {
-    const body = Object.fromEntries(formData.entries()) as any
+    const body = Object.fromEntries(Array.from(formData.entries())) as any
+    const headers = { 'Content-Type': 'application/json', 'x-user-id': uid || '' }
     const res = await fetch(`${API}/trucks`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-id': uid || '' },
+      headers,
       body: JSON.stringify({ number: body.number, vin: body.vin })
     })
     if (res.ok) setTrucks([...(trucks||[]), await res.json()])
