@@ -1,5 +1,6 @@
-const API = process.env.NEXT_PUBLIC_API!;
 'use client'
+const API = process.env.NEXT_PUBLIC_API!;
+
 import { useEffect, useState } from 'react'
 
 export default function TrucksPage() {
