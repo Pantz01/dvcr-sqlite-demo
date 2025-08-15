@@ -14,7 +14,11 @@ export default function Topbar() {
         <>
           <span className="text-sm text-gray-600">{u.name} ({u.role})</span>
           <button
-            onClick={() => { localStorage.removeItem('token'); localStorage.removeItem('user'); window.location.href='/login' }}
+            onClick={() => {
+              localStorage.removeItem('token');
+              localStorage.removeItem('user');
+              window.location.href = '/login';
+            }}
             className="text-sm underline"
           >
             Logout
