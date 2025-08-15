@@ -1,5 +1,5 @@
 'use client'
-const API = process.env.NEXT_PUBLIC_API!;
+const API = process.env.NEXT_PUBLIC_API as string;
 
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
@@ -16,14 +16,16 @@ export default function TruckDetail() {
   }, [id])
 
   async function createReport(formData: FormData) {
-    const body = Object.fromEntries(formData.entries()) as any
-    theaders = { 'Content-Type':'application/json', 'x-user-id': uid || '' }
+    const body = Object.fromEntries(Array.from(formData.entries())) as any
+    const headers = { 'Content-Type':'application/json', 'x-user-id': uid || '' }
     const res = await fetch(`${API}/trucks/${id}/reports`, {
-      method: 'POST', headers: theaders,
+      method: 'POST',
+      headers,
       body: JSON.stringify({ odometer: Number(body.odometer||0), summary: body.summary })
     })
     if (res.ok) setReports([await res.json(), ...reports])
   }
+
 
   if (!truck) return <main className="p-6">Loading...</main>
 
