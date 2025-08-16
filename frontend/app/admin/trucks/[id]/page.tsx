@@ -26,7 +26,7 @@ type Report = {
   id: number
   created_at: string
   odometer?: number | null
-  status: string
+  status: 'OPEN' | 'CLOSED' | string
   summary?: string | null
   defects?: Defect[]
   notes?: { id: number; text: string; created_at: string; author: { name: string } }[]
@@ -51,8 +51,9 @@ function TruckInner() {
   const [activeReport, setActiveReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  // add/edit issue form
+  // add-issue form
   const [newIssue, setNewIssue] = useState('')
 
   useEffect(() => {
@@ -62,21 +63,24 @@ function TruckInner() {
   }, [truckId])
 
   async function loadTruck() {
+    setError(null)
     const r = await fetch(`${API}/trucks/${truckId}`, { headers: authHeaders() })
-    if (r.ok) setTruck(await r.json())
+    if (!r.ok) { setError(await r.text()); return }
+    setTruck(await r.json())
   }
 
   async function loadReports() {
+    setError(null)
     setLoading(true)
     const r = await fetch(`${API}/trucks/${truckId}/reports`, { headers: authHeaders() })
     setLoading(false)
-    if (!r.ok) { alert(await r.text()); return }
+    if (!r.ok) { setError(await r.text()); return }
     const list: Report[] = await r.json()
     setReports(list)
     if (list.length) {
-      // hydrate the newest report
-      const rr = await fetch(`${API}/reports/${list[0].id}`, { headers: authHeaders() })
-      setActiveReport(rr.ok ? await rr.json() : list[0])
+      const first = await fetch(`${API}/reports/${list[0].id}`, { headers: authHeaders() })
+      if (first.ok) setActiveReport(await first.json())
+      else setActiveReport(list[0])
     } else {
       setActiveReport(null)
     }
@@ -92,22 +96,7 @@ function TruckInner() {
     }
   }
 
-  // Create a new report (no pre/post, just odometer + summary optional)
-  async function createReport(odometer: number, summary: string) {
-    if (!truck) return
-    setBusy(true)
-    const r = await fetch(`${API}/trucks/${truck.id}/reports`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ odometer, summary }), // backend defaults type to "pre", but we ignore it
-    })
-    setBusy(false)
-    if (!r.ok) { alert(await r.text()); return }
-    await loadTruck()
-    await loadReports()
-  }
-
-  // Update report fields
+  // Report field edits
   async function updateReportField(patch: Partial<Pick<Report, 'odometer' | 'summary' | 'status'>>) {
     if (!activeReport) return
     const r = await fetch(`${API}/reports/${activeReport.id}`, {
@@ -119,16 +108,15 @@ function TruckInner() {
     await reloadActiveReport()
   }
 
-  // Delete report
-  async function deleteReport() {
-    if (!activeReport) return
-    if (!confirm('Delete this report and all its issues/notes?')) return
-    const r = await fetch(`${API}/reports/${activeReport.id}`, { method: 'DELETE', headers: authHeaders() })
+  // Delete whole report
+  async function deleteReport(rep: Report) {
+    if (!confirm('Delete this report and all its issues?')) return
+    const r = await fetch(`${API}/reports/${rep.id}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok && r.status !== 204) { alert(await r.text()); return }
     await loadReports()
   }
 
-  // Issues (defects) CRUD (we store everything as component: 'general', severity: 'minor')
+  // Add/edit/resolve/delete issues
   async function addIssue() {
     if (!activeReport) return
     const text = newIssue.trim()
@@ -136,7 +124,11 @@ function TruckInner() {
     const r = await fetch(`${API}/reports/${activeReport.id}/defects`, {
       method: 'POST',
       headers: jsonHeaders(),
-      body: JSON.stringify({ component: 'general', severity: 'minor', description: text }),
+      body: JSON.stringify({
+        component: 'general',
+        severity: 'minor',
+        description: text,
+      }),
     })
     if (!r.ok) { alert(await r.text()); return }
     setNewIssue('')
@@ -144,7 +136,7 @@ function TruckInner() {
   }
 
   async function editIssue(d: Defect) {
-    const next = prompt('Edit issue:', d.description || '') ?? ''
+    const next = prompt('Edit issue', d.description || '') ?? ''
     const r = await fetch(`${API}/defects/${d.id}`, {
       method: 'PATCH',
       headers: jsonHeaders(),
@@ -154,7 +146,7 @@ function TruckInner() {
     await reloadActiveReport()
   }
 
-  async function toggleIssueResolved(d: Defect) {
+  async function toggleResolved(d: Defect) {
     const r = await fetch(`${API}/defects/${d.id}`, {
       method: 'PATCH',
       headers: jsonHeaders(),
@@ -173,143 +165,31 @@ function TruckInner() {
 
   const defects = useMemo(() => activeReport?.defects || [], [activeReport])
 
-  // Simple inline creator for new report
-  const [newOdo, setNewOdo] = useState<number>(0)
-  const [newSummary, setNewSummary] = useState('')
-
   return (
     <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">{truck ? `Truck ${truck.number}` : 'Truck'}</h1>
+      <h1 className="text-2xl font-bold">
+        {truck ? `Truck ${truck.number}` : 'Truck'}
+      </h1>
 
-      {/* Truck basics */}
+      {error && <div className="text-sm text-red-600">{error}</div>}
+
+      {/* Truck details (read-only here; truck editing happens in Admin Trucks list page) */}
       <div className="border rounded-2xl p-4 text-sm">
         {truck ? (
           <div className="grid sm:grid-cols-4 gap-2">
-            <div><span className="text-gray-600">Number:</span> <b>{truck.number}</b></div>
-            <div><span className="text-gray-600">VIN:</span> <b>{truck.vin || '—'}</b></div>
-            <div><span className="text-gray-600">Odometer:</span> <b>{truck.odometer ?? 0}</b></div>
-            <div><span className="text-gray-600">Status:</span> <b>{truck.active ? 'Active' : 'Inactive'}</b></div>
+            <div><span className="text-gray-600">Truck #</span> <b>{truck.number}</b></div>
+            <div><span className="text-gray-600">VIN</span> <b>{truck.vin || '—'}</b></div>
+            <div><span className="text-gray-600">Odometer</span> <b>{truck.odometer ?? 0}</b></div>
+            <div><span className="text-gray-600">Status</span> <b>{truck.active ? 'Active' : 'Inactive'}</b></div>
           </div>
         ) : (
           <div className="text-gray-500">Loading truck…</div>
         )}
       </div>
 
-      {/* Create a report (just odometer + summary) */}
-      <div className="border rounded-2xl p-4 space-y-2">
-        <div className="font-semibold">New Report</div>
-        <div className="grid sm:grid-cols-5 gap-2">
-          <input
-            type="number"
-            className="border p-2 rounded-xl"
-            placeholder="Odometer"
-            value={newOdo}
-            onChange={(e) => setNewOdo(parseInt(e.target.value || '0', 10))}
-          />
-          <input
-            className="border p-2 rounded-xl sm:col-span-3"
-            placeholder="Summary (optional)"
-            value={newSummary}
-            onChange={(e) => setNewSummary(e.target.value)}
-          />
-          <button
-            className="border rounded-xl p-2"
-            disabled={busy}
-            onClick={() => createReport(newOdo, newSummary)}
-          >
-            {busy ? 'Creating…' : 'Create report'}
-          </button>
-        </div>
-      </div>
-
-      {/* Active report details */}
-      <div className="border rounded-2xl p-4 space-y-3">
-        <div className="font-semibold">Report Details</div>
-        {!activeReport ? (
-          <div className="text-sm text-gray-500">No reports yet. Create the first one above.</div>
-        ) : (
-          <>
-            <div className="grid md:grid-cols-2 gap-3 items-end">
-              <div className="text-sm text-gray-700">
-                Created <b>{new Date(activeReport.created_at).toLocaleString()}</b> · Status <b>{activeReport.status}</b>
-                <div className="mt-2 flex gap-2 items-center">
-                  <span className="text-gray-600 text-xs">Odometer:</span>
-                  <input
-                    type="number"
-                    defaultValue={activeReport.odometer ?? 0}
-                    className="border rounded px-2 py-0.5 w-32"
-                    onBlur={(e) => updateReportField({ odometer: parseInt(e.target.value || '0', 10) })}
-                  />
-                </div>
-                <div className="mt-2">
-                  <input
-                    className="border rounded px-2 py-1 w-full"
-                    placeholder="Summary"
-                    defaultValue={activeReport.summary ?? ''}
-                    onBlur={(e) => updateReportField({ summary: e.target.value })}
-                  />
-                </div>
-              </div>
-              <div className="flex gap-2 md:justify-end">
-                {activeReport.status !== 'CLOSED' && (
-                  <button className="border rounded-xl px-3 py-2" onClick={() => updateReportField({ status: 'CLOSED' })}>
-                    Close report
-                  </button>
-                )}
-                <button className="border border-red-600 text-red-600 rounded-xl px-3 py-2" onClick={deleteReport}>
-                  Delete report
-                </button>
-              </div>
-            </div>
-
-            {/* Issues (defects) */}
-            <div className="rounded-xl border">
-              <div className="p-3 font-semibold">Issues</div>
-
-              <div className="p-3 grid sm:grid-cols-5 gap-2 border-b">
-                <input
-                  className="border p-2 rounded-xl sm:col-span-4"
-                  placeholder="Describe a new issue"
-                  value={newIssue}
-                  onChange={(e) => setNewIssue(e.target.value)}
-                />
-                <button className="border rounded-xl p-2" onClick={addIssue}>Add</button>
-              </div>
-
-              {defects.length === 0 ? (
-                <div className="p-3 text-sm text-gray-500">No issues listed.</div>
-              ) : (
-                <div className="divide-y">
-                  {defects.map(d => (
-                    <div key={d.id} className="p-3 text-sm flex items-center gap-3">
-                      <input
-                        type="checkbox"
-                        checked={d.resolved}
-                        onChange={() => toggleIssueResolved(d)}
-                        title={d.resolved ? 'Unresolve' : 'Resolve'}
-                      />
-                      <div className="flex-1">
-                        <div className={`font-medium ${d.resolved ? 'line-through text-gray-500' : ''}`}>
-                          {d.description || '(no description)'}
-                        </div>
-                        <div className="text-xs text-gray-600">
-                          {d.resolved ? 'Resolved' : 'Open'}
-                        </div>
-                      </div>
-                      <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
-                      <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* All reports list (select to view/edit) */}
+      {/* Reports list + pick one */}
       <div className="border rounded-2xl overflow-hidden">
-        <div className="p-3 font-semibold border-b">All Reports</div>
+        <div className="p-3 font-semibold border-b">Reports</div>
         {loading ? (
           <div className="p-4 text-sm text-gray-500">Loading…</div>
         ) : reports.length === 0 ? (
@@ -317,21 +197,112 @@ function TruckInner() {
         ) : (
           <div className="divide-y">
             {reports.map(r => (
-              <button
-                key={r.id}
-                className={`w-full text-left p-3 hover:bg-gray-50 ${activeReport?.id === r.id ? 'bg-gray-50' : ''}`}
-                onClick={async () => {
-                  const rr = await fetch(`${API}/reports/${r.id}`, { headers: authHeaders() })
-                  setActiveReport(rr.ok ? await rr.json() : r)
-                }}
-              >
-                <div className="text-sm">
-                  {new Date(r.created_at).toLocaleString()} · Odo {r.odometer ?? '—'} · {r.status}
+              <div key={r.id} className={`p-3 ${activeReport?.id === r.id ? 'bg-gray-50' : ''}`}>
+                <div className="flex items-center gap-3 justify-between">
+                  <button
+                    className="text-left flex-1 hover:underline"
+                    onClick={async () => {
+                      const rr = await fetch(`${API}/reports/${r.id}`, { headers: authHeaders() })
+                      if (rr.ok) setActiveReport(await rr.json())
+                      else setActiveReport(r)
+                    }}
+                  >
+                    <div className="text-sm">
+                      {new Date(r.created_at).toLocaleString()} · Odo {r.odometer ?? '—'} · {r.status}
+                    </div>
+                    {r.summary ? <div className="text-xs text-gray-600">{r.summary}</div> : null}
+                  </button>
+                  <button
+                    className="text-xs underline text-red-600"
+                    onClick={() => deleteReport(r)}
+                  >
+                    Delete
+                  </button>
                 </div>
-                {r.summary ? <div className="text-xs text-gray-600">{r.summary}</div> : null}
-              </button>
+              </div>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Active report editor */}
+      <div className="border rounded-2xl p-4 space-y-3">
+        <div className="font-semibold">Active Report</div>
+        {!activeReport ? (
+          <div className="text-sm text-gray-500">Select a report above.</div>
+        ) : (
+          <>
+            <div className="grid md:grid-cols-3 gap-3 items-end">
+              <label className="grid gap-1 text-sm">
+                <span className="text-gray-600">Odometer</span>
+                <input
+                  type="number"
+                  defaultValue={activeReport.odometer ?? 0}
+                  className="border p-2 rounded-xl"
+                  onBlur={(e) => updateReportField({ odometer: parseInt(e.target.value || '0', 10) })}
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm md:col-span-2">
+                <span className="text-gray-600">Summary</span>
+                <input
+                  defaultValue={activeReport.summary ?? ''}
+                  className="border p-2 rounded-xl w-full"
+                  onBlur={(e) => updateReportField({ summary: e.target.value })}
+                />
+              </label>
+
+              <label className="grid gap-1 text-sm">
+                <span className="text-gray-600">Status</span>
+                <select
+                  defaultValue={activeReport.status}
+                  className="border p-2 rounded-xl"
+                  onChange={(e) => updateReportField({ status: e.target.value as 'OPEN' | 'CLOSED' })}
+                >
+                  <option value="OPEN">OPEN</option>
+                  <option value="CLOSED">CLOSED</option>
+                </select>
+              </label>
+            </div>
+
+            {/* Add issue */}
+            <div className="grid sm:grid-cols-5 gap-2">
+              <input
+                className="border p-2 rounded-xl sm:col-span-4"
+                placeholder="Add an issue (e.g., brake light out)"
+                value={newIssue}
+                onChange={(e) => setNewIssue(e.target.value)}
+              />
+              <button className="border rounded-xl p-2" disabled={busy} onClick={addIssue}>
+                Add issue
+              </button>
+            </div>
+
+            {/* Issues list */}
+            <div className="rounded-xl border divide-y">
+              <div className="p-3 font-semibold">Issues</div>
+              {(defects.length === 0) && (
+                <div className="p-3 text-sm text-gray-500">No issues on this report.</div>
+              )}
+              {defects.map(d => (
+                <div key={d.id} className="p-3 flex items-center gap-3 text-sm">
+                  <div className="flex-1">
+                    <div className="font-medium">
+                      {d.description || '(no description)'}
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      {d.resolved ? 'Resolved' : 'Open'}
+                    </div>
+                  </div>
+                  <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
+                  <button className="text-xs underline" onClick={() => toggleResolved(d)}>
+                    {d.resolved ? 'Reopen' : 'Resolve'}
+                  </button>
+                  <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </main>
