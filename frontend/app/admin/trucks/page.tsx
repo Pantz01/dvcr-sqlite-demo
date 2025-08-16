@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import RequireAuth from '@/components/RequireAuth'
+import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
 import Link from 'next/link'
 
@@ -13,175 +14,304 @@ type Truck = {
   odometer: number
 }
 
-type Report = {
-  id: number
-  truck: Truck
-  created_at: string
-  odometer?: number | null
-  status: string
-  summary?: string | null
+type PM = {
+  odometer: number
+  oil_next_due: number
+  oil_miles_remaining: number
+  chassis_next_due: number
+  chassis_miles_remaining: number
 }
 
-export default function DriverTrucksPage() {
+type Service = {
+  id: number
+  truck_id: number
+  service_type: 'oil' | 'chassis'
+  odometer: number
+  notes?: string | null
+  created_at: string
+}
+
+export default function AdminTrucksPage() {
   return (
     <RequireAuth>
-      <DriverInner />
+      <RoleGuard roles={['manager', 'admin']}>
+        <AdminTrucksInner />
+      </RoleGuard>
     </RequireAuth>
   )
 }
 
-function DriverInner() {
+function AdminTrucksInner() {
   const [trucks, setTrucks] = useState<Truck[]>([])
-  const [truckId, setTruckId] = useState<number | null>(null)
-
-  const [odometer, setOdometer] = useState<number>(0)
-  const [summary, setSummary] = useState('')
-  const [issues, setIssues] = useState('') // one per line
-
+  const [selected, setSelected] = useState<Truck | null>(null)
+  const [pm, setPm] = useState<PM | null>(null)
+  const [services, setServices] = useState<Service[]>([])
   const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState<Report | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadTrucks()
-  }, [])
+  useEffect(() => { loadTrucks() }, [])
 
   async function loadTrucks() {
-    setError(null)
     const r = await fetch(`${API}/trucks`, { headers: authHeaders() })
-    if (!r.ok) { setError(await r.text()); return }
-    const list: Truck[] = await r.json()
-    setTrucks(list.filter(t => t.active))
-    if (!truckId && list.length) setTruckId(list[0].id)
+    if (!r.ok) { alert(await r.text()); return }
+    setTrucks(await r.json())
   }
 
-  async function submit() {
-    setError(null)
-    setDone(null)
+  async function selectTruck(t: Truck) {
+    setSelected(t)
+    setPm(null)
+    setServices([])
+    fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null).then(setPm)
+    fetch(`${API}/trucks/${t.id}/service`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : []).then(setServices)
+  }
 
-    if (!truckId) { setError('Select a truck.'); return }
-    if (!odometer || odometer < 0) { setError('Enter a valid odometer.'); return }
-
-    setBusy(true)
-    try {
-      // 1) create the report
-      const r = await fetch(`${API}/trucks/${truckId}/reports`, {
-        method: 'POST',
-        headers: jsonHeaders(),
-        body: JSON.stringify({ odometer, summary }),
-      })
-      if (!r.ok) { throw new Error(await r.text()) }
-      const rep: Report = await r.json()
-
-      // 2) create issues (defects) one per non-empty line
-      const lines = issues.split('\n').map(s => s.trim()).filter(Boolean)
-      for (const line of lines) {
-        const d = await fetch(`${API}/reports/${rep.id}/defects`, {
-          method: 'POST',
-          headers: jsonHeaders(),
-          body: JSON.stringify({
-            component: 'general',
-            severity: 'minor',
-            description: line,
-          }),
-        })
-        if (!d.ok) throw new Error(await d.text())
-      }
-
-      setDone(rep)
-      // reset form
-      setOdometer(0)
-      setSummary('')
-      setIssues('')
-    } catch (e: any) {
-      setError(e?.message || 'Failed to submit.')
-    } finally {
-      setBusy(false)
+  async function saveField(t: Truck, patch: Partial<Truck>) {
+    const r = await fetch(`${API}/trucks/${t.id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify(patch),
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    const updated = await r.json()
+    setTrucks(prev => prev.map(x => x.id === t.id ? updated : x))
+    if (selected?.id === t.id) setSelected(updated)
+    if (patch.odometer !== undefined) {
+      const p = await fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
+      if (p.ok) setPm(await p.json())
     }
+  }
+
+  async function addService(truck: Truck, service_type: 'oil' | 'chassis', odometer: number, notes: string) {
+    setBusy(true)
+    const r = await fetch(`${API}/trucks/${truck.id}/service`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ service_type, odometer, notes }),
+    })
+    setBusy(false)
+    if (!r.ok) { alert(await r.text()); return }
+    // refresh PM + list
+    selectTruck(truck)
+  }
+
+  async function deleteService(serviceId: number) {
+    if (!selected) return
+    if (!confirm('Delete this service record?')) return
+    const r = await fetch(`${API}/service/${serviceId}`, { method: 'DELETE', headers: authHeaders() })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    selectTruck(selected)
+  }
+
+  async function deleteTruck(t: Truck) {
+    if (!confirm(`Delete truck ${t.number}? This will remove its reports/defects/photos/services.`)) return
+    const r = await fetch(`${API}/trucks/${t.id}`, { method: 'DELETE', headers: authHeaders() })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    setSelected(null); setPm(null); setServices([])
+    loadTrucks()
   }
 
   return (
     <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">Truck Report</h1>
+      <h1 className="text-2xl font-bold">Admin · Trucks</h1>
 
-      <div className="border rounded-2xl p-4 space-y-3 max-w-3xl">
-        <div className="grid sm:grid-cols-2 gap-3">
-          <label className="grid gap-1 text-sm">
-            <span className="text-gray-600">Truck</span>
-            <select
-              className="border p-2 rounded-xl"
-              value={truckId ?? ''}
-              onChange={(e) => setTruckId(parseInt(e.target.value || '0', 10) || null)}
-            >
-              {trucks.map(t => (
-                <option key={t.id} value={t.id}>
-                  {t.number} {t.vin ? `· ${t.vin}` : ''}
-                </option>
-              ))}
-              {trucks.length === 0 && <option value="">No active trucks</option>}
-            </select>
-          </label>
-
-          <label className="grid gap-1 text-sm">
-            <span className="text-gray-600">Odometer</span>
-            <input
-              type="number"
-              className="border p-2 rounded-xl"
-              placeholder="e.g. 123456"
-              value={odometer}
-              onChange={(e) => setOdometer(parseInt(e.target.value || '0', 10))}
-            />
-          </label>
+      <div className="grid md:grid-cols-3 gap-4">
+        {/* Left: truck list */}
+        <div className="border rounded-2xl overflow-hidden">
+          <div className="p-3 font-semibold border-b">Fleet</div>
+          <div className="max-h-[60vh] overflow-auto divide-y">
+            {trucks.map(t => (
+              <button
+                key={t.id}
+                className={`w-full text-left p-3 hover:bg-gray-50 ${selected?.id === t.id ? 'bg-gray-50' : ''}`}
+                onClick={() => selectTruck(t)}
+              >
+                <div className="font-medium">{t.number}</div>
+                <div className="text-xs text-gray-600">
+                  VIN {t.vin || '—'} · Odo {t.odometer ?? 0} · {t.active ? 'Active' : 'Inactive'}
+                </div>
+              </button>
+            ))}
+            {trucks.length === 0 && (
+              <div className="p-3 text-sm text-gray-500">No trucks.</div>
+            )}
+          </div>
         </div>
 
-        <label className="grid gap-1 text-sm">
-          <span className="text-gray-600">Summary (optional)</span>
-          <input
-            className="border p-2 rounded-xl"
-            placeholder="Short summary"
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-          />
-        </label>
+        {/* Right: details & actions */}
+        <div className="md:col-span-2 space-y-4">
+          <div className="border rounded-2xl">
+            <div className="p-3 font-semibold border-b">Details</div>
+            {!selected ? (
+              <div className="p-4 text-sm text-gray-500">Select a truck on the left.</div>
+            ) : (
+              <div className="p-4 space-y-4">
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <Labeled label="Truck Number">
+                    <input
+                      defaultValue={selected.number}
+                      className="border p-2 rounded-xl w-full"
+                      onBlur={(e) => saveField(selected, { number: e.target.value })}
+                    />
+                  </Labeled>
 
-        <label className="grid gap-1 text-sm">
-          <span className="text-gray-600">Issues (one per line)</span>
-          <textarea
-            className="border p-2 rounded-xl h-40"
-            placeholder={`Example:\nLeft headlight out\nAir leak at gladhand\nWorn wiper blades`}
-            value={issues}
-            onChange={(e) => setIssues(e.target.value)}
-          />
-        </label>
+                  <Labeled label="VIN">
+                    <input
+                      defaultValue={selected.vin ?? ''}
+                      className="border p-2 rounded-xl w-full"
+                      onBlur={(e) => saveField(selected, { vin: e.target.value || null as any })}
+                    />
+                  </Labeled>
 
-        {error && <div className="text-sm text-red-600">{error}</div>}
+                  <Labeled label="Odometer">
+                    <input
+                      type="number"
+                      defaultValue={selected.odometer ?? 0}
+                      className="border p-2 rounded-xl w-full"
+                      onBlur={(e) => saveField(selected, { odometer: parseInt(e.target.value || '0', 10) })}
+                    />
+                  </Labeled>
 
-        <div className="flex items-center gap-3">
-          <button
-            className="border rounded-xl px-4 py-2"
-            disabled={busy || !truckId}
-            onClick={submit}
-          >
-            {busy ? 'Submitting…' : 'Submit report'}
-          </button>
-          {done && (
-            <span className="text-sm text-green-700">
-              Report submitted.{' '}
-              <Link
-                href={`/admin/trucks/${done.truck.id}`}
-                className="underline"
-                title="Open in admin (managers/admins only)"
-              >
-                View in Admin
-              </Link>
-            </span>
-          )}
+                  <Labeled label="Active">
+                    <select
+                      defaultValue={selected.active ? '1' : '0'}
+                      className="border p-2 rounded-xl w-full"
+                      onChange={(e) => saveField(selected, { active: e.target.value === '1' })}
+                    >
+                      <option value="1">Active</option>
+                      <option value="0">Inactive</option>
+                    </select>
+                  </Labeled>
+                </div>
+
+                {/* PM snapshot */}
+                <div className="border rounded-2xl p-3">
+                  <div className="font-semibold mb-2">PM Status</div>
+                  {pm ? (
+                    <div className="grid sm:grid-cols-2 gap-2 text-sm">
+                      <div>Odometer: <b>{pm.odometer}</b></div>
+                      <div>Oil next due: <b>{pm.oil_next_due}</b> ({pm.oil_miles_remaining} mi left)</div>
+                      <div>Chassis next due: <b>{pm.chassis_next_due}</b> ({pm.chassis_miles_remaining} mi left)</div>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">—</div>
+                  )}
+                </div>
+
+                {/* Manage reports link */}
+                <div>
+                  <Link href={`/admin/trucks/${selected.id}`} className="underline">
+                    Manage Reports
+                  </Link>
+                </div>
+
+                {/* Add service */}
+                <AddServiceCard
+                  busy={busy}
+                  onAdd={(svc, odo, notes) => selected && addService(selected, svc, odo, notes)}
+                />
+
+                {/* Service history */}
+                <div className="border rounded-2xl overflow-hidden">
+                  <div className="p-3 font-semibold border-b">Service History</div>
+                  <div className="max-h-[40vh] overflow-auto divide-y">
+                    {services.map(s => (
+                      <div key={s.id} className="p-3 flex items-center gap-3">
+                        <div className="w-20 uppercase text-xs">{s.service_type}</div>
+                        <div className="flex-1 text-sm">
+                          Odo {s.odometer} · {new Date(s.created_at).toLocaleString()}
+                          {s.notes ? <span className="text-gray-600"> · {s.notes}</span> : null}
+                        </div>
+                        <button className="text-xs underline text-red-600" onClick={() => deleteService(s.id)}>
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                    {services.length === 0 && (
+                      <div className="p-3 text-sm text-gray-500">No services yet.</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Danger zone */}
+                <div className="border rounded-2xl p-3">
+                  <div className="font-semibold mb-2">Danger Zone</div>
+                  <button
+                    className="border border-red-600 text-red-600 rounded-xl px-3 py-2"
+                    onClick={() => selected && deleteTruck(selected)}
+                  >
+                    Delete Truck
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-
-      <p className="text-xs text-gray-600 max-w-3xl">
-        Tip: put each issue on its own line. You can edit/resolve issues later from the admin screen.
-      </p>
     </main>
+  )
+}
+
+function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="grid gap-1 text-sm">
+      <span className="text-gray-600">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function AddServiceCard({
+  busy,
+  onAdd,
+}: {
+  busy: boolean
+  onAdd: (t: 'oil' | 'chassis', odo: number, notes: string) => void
+}) {
+  const [svc, setSvc] = useState<'oil' | 'chassis'>('oil')
+  const [odo, setOdo] = useState<number>(0)
+  const [notes, setNotes] = useState('')
+
+  return (
+    <div className="border rounded-2xl p-3 space-y-2">
+      <div className="font-semibold">Add Service</div>
+      <div className="grid sm:grid-cols-5 gap-2">
+        <select
+          className="border p-2 rounded-xl"
+          value={svc}
+          onChange={(e) => setSvc(e.target.value as 'oil' | 'chassis')}
+        >
+          <option value="oil">oil</option>
+          <option value="chassis">chassis</option>
+        </select>
+
+        <input
+          type="number"
+          className="border p-2 rounded-xl"
+          placeholder="Odometer"
+          value={odo}
+          onChange={(e) => setOdo(parseInt(e.target.value || '0', 10))}
+        />
+
+        <input
+          className="border p-2 rounded-xl sm:col-span-2"
+          placeholder="Notes (optional)"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+
+        <button
+          className="border rounded-xl p-2"
+          disabled={busy}
+          onClick={() => onAdd(svc, odo, notes)}
+        >
+          {busy ? 'Saving…' : 'Add service'}
+        </button>
+      </div>
+
+      <p className="text-xs text-gray-600">
+        Tip: To change the “next due”, add a service at the odometer that represents the last completed service.
+      </p>
+    </div>
   )
 }
