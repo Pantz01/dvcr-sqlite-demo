@@ -139,7 +139,7 @@ function TruckInner() {
     if (!description.trim()) return
 
     const payload = {
-      component: 'general',      // or map regions later if you like
+      component: 'general',
       severity: 'minor',
       description,
       x,
@@ -228,8 +228,6 @@ function TruckInner() {
           title={activeReport ? 'Click to add a defect' : 'Create a report first'}
           style={{ cursor: activeReport ? 'crosshair' as const : 'not-allowed' as const }}
         >
-          {/* The image is sized via the container's aspect ratio; object-contain keeps it visible fully */}
-          {/* You can replace /bobtail.png with your bobtail diagram path */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/bobtail.png"
@@ -255,6 +253,7 @@ function TruckInner() {
             )
           })}
         </div>
+      </div> {/* ✅ Missing closing div added here */}
 
       {/* Notes */}
       <div className="border rounded-2xl p-4 space-y-3">
@@ -320,3 +319,5 @@ function TruckInner() {
     </main>
   )
 }
+
+
