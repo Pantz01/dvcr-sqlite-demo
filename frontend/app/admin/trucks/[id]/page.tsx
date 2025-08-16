@@ -61,6 +61,7 @@ function TruckInner() {
   const [activeReport, setActiveReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [imgOk, setImgOk] = useState(true)
 
   // create report form
   const [rType, setRType] = useState<'pre' | 'post'>('pre')
@@ -121,12 +122,13 @@ function TruckInner() {
     if (rr.ok) {
       const full = await rr.json()
       setActiveReport(full)
+      // also refresh the list so row data matches
       setReports(prev => prev.map(x => x.id === full.id ? full : x))
     }
   }
 
-  // update report fields (odometer/summary/status)
-  async function updateReportField(patch: Partial<Pick<Report, 'odometer' | 'summary' | 'status'>>) {
+  // update report fields (odometer/summary/status/type)
+  async function updateReportField(patch: Partial<Pick<Report, 'odometer' | 'summary' | 'status' | 'type'>>) {
     if (!activeReport) return
     const r = await fetch(`${API}/reports/${activeReport.id}`, {
       method: 'PATCH',
@@ -135,6 +137,19 @@ function TruckInner() {
     })
     if (!r.ok) { alert(await r.text()); return }
     await reloadActiveReport()
+  }
+
+  async function deleteActiveReport() {
+    if (!activeReport) return
+    if (!confirm('Delete this report? All defects/photos/notes under it will be removed.')) return
+    const r = await fetch(`${API}/reports/${activeReport.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    // refresh page state
+    setActiveReport(null)
+    await loadReports()
   }
 
   // clicking the diagram → add defect with normalized x/y
@@ -184,6 +199,16 @@ function TruckInner() {
     await reloadActiveReport()
   }
 
+  async function deleteDefect(d: Defect) {
+    if (!confirm('Delete this defect (and its photos)?')) return
+    const r = await fetch(`${API}/defects/${d.id}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    await reloadActiveReport()
+  }
+
   // notes
   async function addNote() {
     if (!activeReport) return
@@ -210,7 +235,7 @@ function TruckInner() {
       <div className="border rounded-2xl p-4 space-y-3">
         <div className="font-semibold">Pre/Post Trip Report</div>
         {!activeReport ? (
-          <div className="grid sm:grid-cols-5 gap-2">
+          <div className="grid sm:grid-cols-6 gap-2">
             <select
               className="border p-2 rounded-xl"
               value={rType}
@@ -229,7 +254,7 @@ function TruckInner() {
             />
 
             <input
-              className="border p-2 rounded-xl sm:col-span-2"
+              className="border p-2 rounded-xl sm:col-span-3"
               placeholder="Summary (optional)"
               value={rSummary}
               onChange={(e) => setRSummary(e.target.value)}
@@ -240,19 +265,33 @@ function TruckInner() {
             </button>
           </div>
         ) : (
-          <div className="grid md:grid-cols-2 gap-3 items-end">
-            <div className="text-sm text-gray-700">
-              Active report: <b>{activeReport.type.toUpperCase()}</b> ·{' '}
-              {new Date(activeReport.created_at).toLocaleString()} ·{' '}
-              Odo{' '}
-              <input
-                type="number"
-                defaultValue={activeReport.odometer ?? 0}
-                className="border rounded px-2 py-0.5 w-28"
-                onBlur={(e) => updateReportField({ odometer: parseInt(e.target.value || '0', 10) })}
-              />{' '}
-              · Status <b>{activeReport.status}</b>
-              <div className="mt-2">
+          <div className="grid lg:grid-cols-2 gap-3 items-end">
+            <div className="text-sm text-gray-700 space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Active report:</span>
+                <select
+                  className="border rounded px-2 py-1"
+                  defaultValue={activeReport.type}
+                  onChange={(e) => updateReportField({ type: e.target.value as 'pre' | 'post' })}
+                >
+                  <option value="pre">PRE</option>
+                  <option value="post">POST</option>
+                </select>
+                <span>· {new Date(activeReport.created_at).toLocaleString()}</span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <span>Odo</span>
+                <input
+                  type="number"
+                  defaultValue={activeReport.odometer ?? 0}
+                  className="border rounded px-2 py-0.5 w-28"
+                  onBlur={(e) => updateReportField({ odometer: parseInt(e.target.value || '0', 10) })}
+                />
+                <span>· Status <b>{activeReport.status}</b></span>
+              </div>
+
+              <div>
                 <input
                   className="border rounded px-2 py-1 w-full"
                   placeholder="Summary"
@@ -261,7 +300,8 @@ function TruckInner() {
                 />
               </div>
             </div>
-            <div className="flex gap-2 md:justify-end">
+
+            <div className="flex gap-2 lg:justify-end">
               {activeReport.status !== 'CLOSED' && (
                 <button
                   className="border rounded-xl px-3 py-2"
@@ -270,6 +310,12 @@ function TruckInner() {
                   Close report
                 </button>
               )}
+              <button
+                className="border border-red-600 text-red-600 rounded-xl px-3 py-2"
+                onClick={deleteActiveReport}
+              >
+                Delete report
+              </button>
             </div>
           </div>
         )}
@@ -284,14 +330,21 @@ function TruckInner() {
           title={activeReport ? 'Click to add a defect' : 'Create a report first'}
           style={{ cursor: activeReport ? 'crosshair' as const : 'not-allowed' as const }}
         >
-          {/* Ensure this file exists at frontend/public/bobtail.png */}
+          {/* Ensure /public/bobtail.png exists in your Next.js app */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/bobtail.png"
-            alt="Bobtail"
-            className="absolute inset-0 w-full h-full object-contain select-none pointer-events-none"
-            draggable={false}
-          />
+          {imgOk ? (
+            <img
+              src="/bobtail.png"
+              alt="Bobtail"
+              className="absolute inset-0 w-full h-full object-contain select-none pointer-events-none"
+              draggable={false}
+              onError={() => setImgOk(false)}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-500">
+              Add <code>public/bobtail.png</code> to show the diagram.
+            </div>
+          )}
 
           {/* markers */}
           {defects.map((d) => {
@@ -311,7 +364,7 @@ function TruckInner() {
           })}
         </div>
 
-        {/* Defects list with edit/resolve */}
+        {/* Defects list with edit/resolve/delete */}
         <div className="rounded-xl border divide-y">
           <div className="p-3 font-semibold">Defects</div>
           {(defects.length === 0) && (
@@ -328,6 +381,9 @@ function TruckInner() {
               <button className="text-xs underline" onClick={() => editDefectDescription(d)}>Edit</button>
               <button className="text-xs underline" onClick={() => toggleDefectResolved(d)}>
                 {d.resolved ? 'Reopen' : 'Resolve'}
+              </button>
+              <button className="text-xs underline text-red-600" onClick={() => deleteDefect(d)}>
+                Delete
               </button>
             </div>
           ))}
