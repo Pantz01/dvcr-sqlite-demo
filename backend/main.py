@@ -595,6 +595,7 @@ def patch_report(
         r.type = payload.type
     db.commit(); db.refresh(r); return r
 
+# >>> REPLACED: delete_report now also removes photo files best-effort
 @app.delete("/reports/{report_id}", status_code=204)
 def delete_report(
     report_id: int,
@@ -605,6 +606,18 @@ def delete_report(
     r = db.get(Report, report_id)
     if not r:
         return
+
+    # best-effort: remove any uploaded photo files belonging to defects in this report
+    for d in r.defects:
+        for p in d.photos:
+            try:
+                rel = p.path.lstrip("/")  # stored like "/uploads/filename"
+                disk_path = os.path.join(os.getcwd(), rel if os.path.isabs(rel) else rel)
+                if os.path.isfile(disk_path):
+                    os.remove(disk_path)
+            except Exception:
+                pass
+
     db.delete(r)
     db.commit()
 
@@ -653,6 +666,7 @@ async def upload_photos(defect_id: int, files: List[UploadFile] = File(...), cap
     db.commit()
     for p in saved: db.refresh(p)
     return saved
+
 # ---- DELETE a defect (and its photos) ----
 @app.delete("/defects/{defect_id}", status_code=204)
 def delete_defect(
