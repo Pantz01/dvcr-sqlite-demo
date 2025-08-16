@@ -151,7 +151,7 @@ from passlib.hash import bcrypt
 
 def make_token(user_id: int) -> str:
     exp = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
-    return jwt.encode({"sub": str(user_id), "exp": exp}, JWT_SECRET, algorithm="HS256")
+    return jwt.encode({"sub": str(user_id), "exp": exp}, JWT_SECRET, algorithm="HS256"])
 
 def decode_token(token: str) -> int:
     data = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
@@ -281,6 +281,13 @@ class ReportOut(BaseModel):
     class Config:
         from_attributes = True
 
+# >>> NEW: simple driver input (no image) to create a report with multiple free-text issues
+class SimpleReportIn(BaseModel):
+    type: str = "pre"                # 'pre' | 'post'
+    odometer: Optional[int] = None
+    summary: Optional[str] = None
+    issues: List[str] = Field(default_factory=list)  # each string is one problem line
+
 class LoginIn(BaseModel):
     email: str
     password: str
@@ -331,6 +338,19 @@ class ServiceOut(BaseModel):
     created_at: datetime
     class Config:
         from_attributes = True
+
+# >>> NEW: flat issue view for admin/manager checklists
+class IssueOut(BaseModel):
+    id: int                 # defect id
+    description: Optional[str]
+    component: str
+    severity: str
+    resolved: bool
+    created_at: datetime    # report created_at
+    report_id: int
+    report_type: str
+    truck_id: int
+    truck_number: str
 
 # ----------------- Routes -----------------
 @app.post("/auth/login", response_model=LoginOut)
@@ -556,6 +576,50 @@ def create_report(truck_id: int, payload: ReportIn, user: User = Depends(require
         truck.odometer = payload.odometer
     db.commit(); db.refresh(r); return r
 
+# >>> NEW: simple create — one call to create report + multiple free-text issues
+@app.post("/trucks/{truck_id}/reports/simple", response_model=ReportOut)
+def create_simple_report(
+    truck_id: int,
+    payload: SimpleReportIn,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    truck = db.get(Truck, truck_id)
+    if not truck:
+        raise HTTPException(404, "Truck not found")
+
+    r = Report(
+        truck_id=truck_id,
+        driver_id=user.id,
+        odometer=payload.odometer,
+        summary=payload.summary,
+        type=payload.type if payload.type in ("pre", "post") else "pre",
+    )
+    db.add(r)
+    db.flush()  # get report id
+
+    # Create one defect per non-empty issue line
+    for raw in payload.issues or []:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        d = Defect(
+            report_id=r.id,
+            component="general",
+            severity="minor",
+            description=text,
+        )
+        db.add(d)
+
+    # auto-bump truck odometer if this is higher
+    if payload.odometer and (truck.odometer is None or payload.odometer > truck.odometer):
+        truck.odometer = payload.odometer
+
+    db.commit()
+    db.refresh(r)
+    _ = r.defects, r.notes
+    return r
+
 @app.get("/reports/{report_id}", response_model=ReportOut)
 def get_report(report_id: int, db: Session = Depends(get_db)):
     r = db.get(Report, report_id)
@@ -595,7 +659,6 @@ def patch_report(
         r.type = payload.type
     db.commit(); db.refresh(r); return r
 
-# >>> REPLACED: delete_report now also removes photo files best-effort
 @app.delete("/reports/{report_id}", status_code=204)
 def delete_report(
     report_id: int,
@@ -606,18 +669,6 @@ def delete_report(
     r = db.get(Report, report_id)
     if not r:
         return
-
-    # best-effort: remove any uploaded photo files belonging to defects in this report
-    for d in r.defects:
-        for p in d.photos:
-            try:
-                rel = p.path.lstrip("/")  # stored like "/uploads/filename"
-                disk_path = os.path.join(os.getcwd(), rel if os.path.isabs(rel) else rel)
-                if os.path.isfile(disk_path):
-                    os.remove(disk_path)
-            except Exception:
-                pass
-
     db.delete(r)
     db.commit()
 
@@ -721,7 +772,75 @@ def delete_photo(
 
     db.delete(p)
     db.commit()
-    
+
+# >>> NEW: flat issue list per truck (default only open)
+@app.get("/trucks/{truck_id}/issues", response_model=List[IssueOut])
+def truck_issues(
+    truck_id: int,
+    status: Optional[str] = "open",  # 'open' | 'all'
+    db: Session = Depends(get_db),
+):
+    # get reports for this truck
+    reps = db.query(Report).filter(Report.truck_id == truck_id).all()
+    if not reps:
+        return []
+    rep_by_id = {r.id: r for r in reps}
+
+    q = db.query(Defect).filter(Defect.report_id.in_(rep_by_id.keys()))
+    if status == "open":
+        q = q.filter(Defect.resolved == False)
+
+    out: List[IssueOut] = []
+    for d in q.order_by(Defect.id.desc()).all():
+        r = rep_by_id[d.report_id]
+        t = r.truck
+        out.append(IssueOut(
+            id=d.id,
+            description=d.description,
+            component=d.component,
+            severity=d.severity,
+            resolved=d.resolved,
+            created_at=r.created_at,
+            report_id=r.id,
+            report_type=r.type,
+            truck_id=t.id,
+            truck_number=t.number,
+        ))
+    return out
+
+# >>> NEW: flat issue list across the fleet (for admin “Problems” report)
+@app.get("/issues", response_model=List[IssueOut])
+def all_issues(
+    status: Optional[str] = "open",  # 'open' | 'all'
+    truck: Optional[int] = None,     # optional filter by truck_id
+    db: Session = Depends(get_db),
+):
+    q = db.query(Defect).join(Report, Defect.report_id == Report.id).join(Truck, Report.truck_id == Truck.id)
+    if status == "open":
+        q = q.filter(Defect.resolved == False)
+    if truck:
+        q = q.filter(Report.truck_id == truck)
+
+    q = q.order_by(Report.created_at.desc(), Defect.id.desc())
+    rows = q.all()
+    out: List[IssueOut] = []
+    for d in rows:
+        r = d.report
+        t = r.truck
+        out.append(IssueOut(
+            id=d.id,
+            description=d.description,
+            component=d.component,
+            severity=d.severity,
+            resolved=d.resolved,
+            created_at=r.created_at,
+            report_id=r.id,
+            report_type=r.type,
+            truck_id=t.id,
+            truck_number=t.number,
+        ))
+    return out
+
 # ----------------- PM endpoints -----------------
 def pm_status_for(truck: Truck, db: Session) -> dict:
     odom = truck.odometer or 0
