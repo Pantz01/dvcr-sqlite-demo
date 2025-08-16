@@ -256,11 +256,6 @@ function TruckInner() {
           })}
         </div>
 
-        <p className="text-xs text-gray-600">
-          Image is constrained to a bobtail diagram and scaled responsively. Click to add a red marker (defect) with a description.
-        </p>
-      </div>
-
       {/* Notes */}
       <div className="border rounded-2xl p-4 space-y-3">
         <div className="font-semibold">Notes</div>
