@@ -10,6 +10,7 @@ export default function Topbar() {
       <a href="/trucks" className="text-sm">Trucks</a>
       {isMgr && <a href="/admin" className="text-sm">Admin</a>}
       {isMgr && <a href="/users" className="text-sm">Users</a>}
+      {isMgr && <a href="/admin/alerts" className="text-sm">Alerts</a>}
       {isMgr && <a href="/admin/trucks" className="text-sm">Trucks Admin</a>}
       <div className="flex-1" />
       {u ? (
