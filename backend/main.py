@@ -28,6 +28,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ----------------- App -----------------
 app = FastAPI(title="DVCR API")
 
+app.add_mmiddleware = app.add_middleware  # alias for clarity if you search logs
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -62,8 +63,9 @@ class Truck(Base):
     vin = Column(String, nullable=True)
     active = Column(Boolean, default=True)
     odometer = Column(Integer, default=0)
-    reports = relationship("Report", back_populates="truck")
-    services = relationship("ServiceRecord", back_populates="truck")
+    # cascade ensures deleting a truck removes its reports & service rows
+    reports = relationship("Report", back_populates="truck", cascade="all, delete-orphan")
+    services = relationship("ServiceRecord", back_populates="truck", cascade="all, delete-orphan")
 
 class Report(Base):
     __tablename__ = "reports"
@@ -296,6 +298,23 @@ class UserPatch(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = None
 
+# ---- NEW: Truck admin / service schemas ----
+class TruckPatch(BaseModel):
+    number: Optional[str] = None
+    vin: Optional[str] = None
+    active: Optional[bool] = None
+    odometer: Optional[int] = None
+
+class ServiceOut(BaseModel):
+    id: int
+    truck_id: int
+    service_type: str
+    odometer: int
+    notes: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
 # ----------------- Routes -----------------
 @app.post("/auth/login", response_model=LoginOut)
 def login(payload: LoginIn, db: Session = Depends(get_db)):
@@ -381,6 +400,50 @@ def get_truck(truck_id: int, db: Session = Depends(get_db)):
     t = db.get(Truck, truck_id)
     if not t: raise HTTPException(404, "Truck not found")
     return t
+
+# ---- NEW: update a truck
+@app.patch("/trucks/{truck_id}", response_model=TruckOut)
+def patch_truck(
+    truck_id: int,
+    payload: TruckPatch,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    t = db.get(Truck, truck_id)
+    if not t:
+        raise HTTPException(404, "Truck not found")
+
+    if payload.number is not None:
+        exists = db.query(Truck).filter(Truck.number == payload.number, Truck.id != truck_id).first()
+        if exists:
+            raise HTTPException(400, "Truck number already exists")
+        t.number = payload.number
+
+    if payload.vin is not None:
+        t.vin = payload.vin
+    if payload.active is not None:
+        t.active = payload.active
+    if payload.odometer is not None:
+        t.odometer = payload.odometer
+
+    db.commit()
+    db.refresh(t)
+    return t
+
+# ---- NEW: delete a truck (cascades to reports/services/defects/notes/photos)
+@app.delete("/trucks/{truck_id}", status_code=204)
+def delete_truck(
+    truck_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    t = db.get(Truck, truck_id)
+    if not t:
+        return
+    db.delete(t)
+    db.commit()
 
 @app.get("/trucks/{truck_id}/reports", response_model=List[ReportOut])
 def list_reports(truck_id: int, db: Session = Depends(get_db)):
@@ -515,11 +578,24 @@ def add_service(truck_id: int, svc: ServiceIn, user: User = Depends(require_user
     db.commit()
     return pm_status_for(truck, db)
 
-@app.get("/trucks/{truck_id}/service")
+# ---- NEW: typed service list for admin UI
+@app.get("/trucks/{truck_id}/service", response_model=List[ServiceOut])
 def list_service(truck_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
     return db.query(ServiceRecord).filter_by(truck_id=truck_id).order_by(ServiceRecord.created_at.desc()).all()
+
+# ---- NEW: delete a service record
+@app.delete("/service/{service_id}", status_code=204)
+def delete_service(service_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    if user.role not in ["manager", "mechanic", "admin"]:
+        raise HTTPException(403, "Insufficient permissions")
+    s = db.get(ServiceRecord, service_id)
+    if not s:
+        return
+    db.delete(s)
+    db.commit()
 
 # ----------------- Health -----------------
 @app.get("/health")
 def health():
     return {"ok": True}
+
