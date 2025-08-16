@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
@@ -225,6 +226,17 @@ function AdminTrucksInner() {
                   </div>
                 </div>
 
+                {/* Manage Reports link */}
+                <div className="border rounded-2xl p-3">
+                  <div className="font-semibold mb-2">Reports</div>
+                  <Link
+                    href={`/admin/trucks/${selected.id}`}
+                    className="underline text-blue-600"
+                  >
+                    Manage Reports
+                  </Link>
+                </div>
+
                 {/* Danger zone */}
                 <div className="border rounded-2xl p-3">
                   <div className="font-semibold mb-2">Danger Zone</div>
@@ -307,4 +319,5 @@ function AddServiceCard({
     </div>
   )
 }
+
 
