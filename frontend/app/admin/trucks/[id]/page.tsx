@@ -1,268 +1,284 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useParams } from 'next/navigation'
+import Link from 'next/link'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
-import Link from 'next/link'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
 
-type UserOut = { id: number; name: string; email: string; role: string }
-type TruckOut = { id: number; number: string; vin?: string | null; active: boolean; odometer: number }
-type PhotoOut = { id: number; path: string; caption?: string | null }
-type DefectOut = {
-  id: number; component: string; severity: string; description?: string | null;
-  x?: number | null; y?: number | null; resolved: boolean; resolved_by_id?: number | null;
-  resolved_at?: string | null; photos: PhotoOut[];
-}
-type NoteOut = { id: number; author: UserOut; text: string; created_at: string }
-type ReportOut = {
-  id: number; truck: TruckOut; driver: UserOut; created_at: string;
-  odometer?: number | null; status: string; summary?: string | null; type: 'pre' | 'post';
-  defects: DefectOut[]; notes: NoteOut[];
+type Truck = {
+  id: number
+  number: string
+  vin?: string | null
+  active: boolean
+  odometer: number
 }
 
-function buildQuery(params: Record<string, string | number | undefined>) {
-  const q = new URLSearchParams()
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== '') q.set(k, String(v))
-  })
-  return q.toString()
+type Report = {
+  id: number
+  created_at: string
+  odometer?: number | null
+  status: string
+  summary?: string | null
+  type: 'pre' | 'post'
+  driver: { id: number; name: string; email: string; role: string }
+  truck: Truck
 }
 
-export default function AdminTruckReportsPage() {
-  const { id } = useParams<{ id: string }>()
-  const sp = useSearchParams()
-  const router = useRouter()
-
-  const [truck, setTruck] = useState<TruckOut | null>(null)
-  const [reports, setReports] = useState<ReportOut[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
-
-  // filters
-  const [typeFilter, setTypeFilter] = useState<'pre' | 'post' | 'all'>(
-    (sp.get('type') as any) === 'pre' || (sp.get('type') as any) === 'post' ? (sp.get('type') as 'pre' | 'post') : 'all'
+export default function ManageReportsPage() {
+  return (
+    <RequireAuth>
+      <RoleGuard roles={['manager', 'admin']}>
+        <ManageReportsInner />
+      </RoleGuard>
+    </RequireAuth>
   )
-  const [page, setPage] = useState<number>(Number(sp.get('page') || 1))
-  const [limit, setLimit] = useState<number>(Number(sp.get('limit') || 20))
+}
 
-  const skip = useMemo(() => (page - 1) * limit, [page, limit])
-  const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit])
+function ManageReportsInner() {
+  const params = useParams() as { id: string }
+  const truckId = Number(params.id)
 
-  // keep URL in sync (useful for reload/share)
+  const [truck, setTruck] = useState<Truck | null>(null)
+  const [reports, setReports] = useState<Report[]>([])
+  const [filter, setFilter] = useState<'all' | 'pre' | 'post'>('all')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  // create form
+  const [newType, setNewType] = useState<'pre' | 'post'>('pre')
+  const [newOdo, setNewOdo] = useState<number>(0)
+  const [newSummary, setNewSummary] = useState('')
+
   useEffect(() => {
-    const qs = buildQuery({
-      type: typeFilter === 'all' ? undefined : typeFilter,
-      page,
-      limit,
-    })
-    router.replace(`?${qs}`)
-  }, [typeFilter, page, limit, router])
+    loadTruck()
+    loadReports()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [truckId])
 
-  useEffect(() => {
-    setLoading(true)
-    // truck
-    fetch(`${API}/trucks/${id}`, { headers: authHeaders() as HeadersInit })
-      .then(r => r.ok ? r.json() : Promise.reject(r))
-      .then(setTruck)
-      .catch(() => setTruck(null))
-
-    // reports
-    const qs = buildQuery({
-      type: typeFilter === 'all' ? undefined : typeFilter,
-      skip,
-      limit,
-    })
-    fetch(`${API}/trucks/${id}/reports?${qs}`, { headers: authHeaders() as HeadersInit })
-      .then(async r => {
-        const total = r.headers.get('X-Total-Count')
-        if (total) setTotal(Number(total))
-        const data = await r.json()
-        if (!r.ok) throw data
-        return data
-      })
-      .then(setReports)
-      .catch(() => setReports([]))
-      .finally(() => setLoading(false))
-  }, [id, typeFilter, skip, limit])
-
-  async function deleteReport(repId: number) {
-    if (!confirm('Delete this report? This cannot be undone.')) return
-    const res = await fetch(`${API}/reports/${repId}`, { method: 'DELETE', headers: authHeaders() as HeadersInit })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(err?.detail || 'Failed to delete')
-      return
-    }
-    // refresh
-    const qs = buildQuery({
-      type: typeFilter === 'all' ? undefined : typeFilter,
-      skip,
-      limit,
-    })
-    const r2 = await fetch(`${API}/trucks/${id}/reports?${qs}`, { headers: authHeaders() as HeadersInit })
-    const total2 = r2.headers.get('X-Total-Count')
-    if (total2) setTotal(Number(total2))
-    setReports(await r2.json())
+  async function loadTruck() {
+    const r = await fetch(`${API}/trucks/${truckId}`, { headers: authHeaders() })
+    if (r.ok) setTruck(await r.json())
   }
 
-  async function editReport(rep: ReportOut) {
-    // very MVP: quick prompts
-    const status = prompt("Status (OPEN/CLOSED)?", rep.status || 'OPEN') || rep.status
-    const type = (prompt("Type (pre/post)?", rep.type) || rep.type) as 'pre' | 'post'
-    const odometerStr = prompt("Odometer (number or blank):", rep.odometer?.toString() || '') || ''
-    const odometer = odometerStr.trim() === '' ? undefined : Number(odometerStr)
-    const summary = prompt("Summary (optional):", rep.summary || '') ?? rep.summary
+  async function loadReports() {
+    setLoading(true)
+    const r = await fetch(`${API}/trucks/${truckId}/reports`, { headers: authHeaders() })
+    setLoading(false)
+    if (!r.ok) { alert(await r.text()); return }
+    setReports(await r.json())
+  }
 
-    const body: Record<string, any> = { status, type, summary }
-    if (odometer !== undefined && !Number.isNaN(odometer)) body.odometer = odometer
+  const filtered = useMemo(() => {
+    if (filter === 'all') return reports
+    return reports.filter(r => r.type === filter)
+  }, [reports, filter])
 
-    const res = await fetch(`${API}/reports/${rep.id}`, {
-      method: 'PATCH',
-      headers: jsonHeaders() as HeadersInit,
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      alert(err?.detail || 'Failed to update')
-      return
+  async function createReport() {
+    if (!newOdo || newOdo < 0) {
+      if (!confirm('Odometer is 0 — continue?')) return
     }
-    // refresh current page
-    const qs = buildQuery({
-      type: typeFilter === 'all' ? undefined : typeFilter,
-      skip,
-      limit,
+    setBusy(true)
+    const r = await fetch(`${API}/trucks/${truckId}/reports`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ type: newType, odometer: newOdo, summary: newSummary }),
     })
-    const r2 = await fetch(`${API}/trucks/${id}/reports?${qs}`, { headers: authHeaders() as HeadersInit })
-    const total2 = r2.headers.get('X-Total-Count')
-    if (total2) setTotal(Number(total2))
-    setReports(await r2.json())
+    setBusy(false)
+    if (!r.ok) { alert(await r.text()); return }
+    setNewSummary('')
+    loadReports()
+    loadTruck()
+  }
+
+  async function saveReport(id: number, patch: Partial<Report>) {
+    const r = await fetch(`${API}/reports/${id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        status: patch.status,
+        summary: patch.summary,
+        odometer: patch.odometer,
+      }),
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    const updated = await r.json()
+    setReports(prev => prev.map(x => x.id === id ? updated : x))
+    if (patch.odometer !== undefined) {
+      // refresh truck to reflect higher odometer if updated
+      loadTruck()
+    }
+  }
+
+  async function deleteReport(id: number) {
+    if (!confirm('Delete this report? This will also remove its defects, notes, and photos.')) return
+    // If your backend is missing DELETE /reports/{id}, add it there.
+    const r = await fetch(`${API}/reports/${id}`, { method: 'DELETE', headers: authHeaders() })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    setReports(prev => prev.filter(x => x.id !== id))
   }
 
   return (
-    <RequireAuth>
-      <RoleGuard roles={['manager','admin']}>
-        <div className="p-4 space-y-4">
-          <div className="flex items-center gap-3">
-            <Link href="/admin/trucks" className="text-sm underline">&larr; Back</Link>
-            <h1 className="text-xl font-semibold">Truck Admin — Reports</h1>
-            {truck && (
-              <span className="text-sm text-gray-600">
-                Truck #{truck.number} · Odo: {truck.odometer?.toLocaleString() ?? 0}
-              </span>
-            )}
-          </div>
+    <main className="p-6 space-y-6">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Manage Reports {truck ? `· ${truck.number}` : ''}</h1>
+        <Link href="/admin/trucks" className="underline text-sm">← Back to Trucks</Link>
+      </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="text-sm">Type:</label>
-            <select
-              className="border rounded px-2 py-1 text-sm"
-              value={typeFilter}
-              onChange={e => { setPage(1); setTypeFilter(e.target.value as any) }}
-            >
-              <option value="all">All</option>
-              <option value="pre">Pre-trip</option>
-              <option value="post">Post-trip</option>
-            </select>
+      {/* Create new report */}
+      <div className="border rounded-2xl p-4 space-y-3">
+        <div className="font-semibold">Add Report</div>
+        <div className="grid sm:grid-cols-5 gap-2">
+          <select
+            className="border p-2 rounded-xl"
+            value={newType}
+            onChange={(e) => setNewType(e.target.value as 'pre' | 'post')}
+          >
+            <option value="pre">pre</option>
+            <option value="post">post</option>
+          </select>
 
-            <div className="flex-1" />
-            <label className="text-sm">Per page:</label>
-            <select
-              className="border rounded px-2 py-1 text-sm"
-              value={limit}
-              onChange={e => { setPage(1); setLimit(Number(e.target.value)) }}
-            >
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
-          </div>
+          <input
+            type="number"
+            className="border p-2 rounded-xl"
+            placeholder="Odometer"
+            value={newOdo}
+            onChange={(e) => setNewOdo(parseInt(e.target.value || '0', 10))}
+          />
 
-          {/* Table */}
-          <div className="overflow-x-auto border rounded">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="text-left p-2">ID</th>
-                  <th className="text-left p-2">Created</th>
-                  <th className="text-left p-2">Driver</th>
-                  <th className="text-left p-2">Type</th>
-                  <th className="text-left p-2">Status</th>
-                  <th className="text-left p-2">Odometer</th>
-                  <th className="text-left p-2">Summary</th>
-                  <th className="text-left p-2">Defects</th>
-                  <th className="text-left p-2">Notes</th>
-                  <th className="text-left p-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && (
-                  <tr><td colSpan={10} className="p-3 text-center text-gray-500">Loading…</td></tr>
-                )}
-                {!loading && reports.length === 0 && (
-                  <tr><td colSpan={10} className="p-3 text-center text-gray-500">No reports</td></tr>
-                )}
-                {!loading && reports.map(r => (
-                  <tr key={r.id} className="border-t">
-                    <td className="p-2">{r.id}</td>
-                    <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
-                    <td className="p-2">{r.driver?.name}</td>
-                    <td className="p-2 uppercase">{r.type}</td>
-                    <td className="p-2">{r.status}</td>
-                    <td className="p-2">{r.odometer?.toLocaleString?.() ?? ''}</td>
-                    <td className="p-2 max-w-[24rem] truncate" title={r.summary || ''}>{r.summary}</td>
-                    <td className="p-2">{r.defects?.length ?? 0}</td>
-                    <td className="p-2">{r.notes?.length ?? 0}</td>
-                    <td className="p-2 space-x-2">
-                      <button
-                        onClick={() => editReport(r)}
-                        className="px-2 py-1 text-xs border rounded hover:bg-gray-50"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => deleteReport(r.id)}
-                        className="px-2 py-1 text-xs border rounded text-red-600 hover:bg-red-50"
-                      >
-                        Delete
-                      </button>
-                      <Link
-                        className="px-2 py-1 text-xs border rounded hover:bg-gray-50"
-                        href={`/trucks/${id}?report=${r.id}`}
-                      >
-                        Open
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <input
+            className="border p-2 rounded-xl sm:col-span-2"
+            placeholder="Summary (optional)"
+            value={newSummary}
+            onChange={(e) => setNewSummary(e.target.value)}
+          />
 
-          {/* Pagination */}
-          <div className="flex items-center gap-3">
-            <button
-              disabled={page <= 1}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Prev
-            </button>
-            <span className="text-sm">
-              Page {page} / {totalPages} &middot; {total.toLocaleString()} total
-            </span>
-            <button
-              disabled={page >= totalPages}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              className="px-3 py-1 border rounded disabled:opacity-50"
-            >
-              Next
-            </button>
-          </div>
+          <button
+            className="border rounded-xl p-2"
+            disabled={busy}
+            onClick={createReport}
+          >
+            {busy ? 'Saving…' : 'Add'}
+          </button>
         </div>
-      </RoleGuard>
-    </RequireAuth>
+        <p className="text-xs text-gray-600">
+          Pre/Post trip reports update the truck’s odometer if you enter a higher reading.
+        </p>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-600">Filter:</span>
+        <button
+          className={`text-sm px-2 py-1 rounded ${filter==='all' ? 'bg-gray-200' : 'border'}`}
+          onClick={() => setFilter('all')}
+        >All</button>
+        <button
+          className={`text-sm px-2 py-1 rounded ${filter==='pre' ? 'bg-gray-200' : 'border'}`}
+          onClick={() => setFilter('pre')}
+        >Pre</button>
+        <button
+          className={`text-sm px-2 py-1 rounded ${filter==='post' ? 'bg-gray-200' : 'border'}`}
+          onClick={() => setFilter('post')}
+        >Post</button>
+      </div>
+
+      {/* Reports list */}
+      <div className="border rounded-2xl overflow-hidden">
+        <div className="p-3 font-semibold border-b">Reports</div>
+        {loading ? (
+          <div className="p-4 text-sm text-gray-500">Loading…</div>
+        ) : filtered.length === 0 ? (
+          <div className="p-4 text-sm text-gray-500">No reports.</div>
+        ) : (
+          <div className="divide-y">
+            {filtered.map(r => (
+              <ReportRow key={r.id} r={r} onSave={saveReport} onDelete={deleteReport} />
+            ))}
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}
+
+function ReportRow({
+  r,
+  onSave,
+  onDelete,
+}: {
+  r: Report
+  onSave: (id: number, patch: Partial<Report>) => void
+  onDelete: (id: number) => void
+}) {
+  const [status, setStatus] = useState(r.status)
+  const [summary, setSummary] = useState(r.summary || '')
+  const [odo, setOdo] = useState<number>(r.odometer ?? 0)
+  const [saving, setSaving] = useState(false)
+
+  async function save() {
+    setSaving(true)
+    await onSave(r.id, { status, summary, odometer: odo })
+    setSaving(false)
+  }
+
+  return (
+    <div className="p-3 grid md:grid-cols-6 gap-3 items-center">
+      <div className="text-xs uppercase">{r.type}</div>
+      <div className="text-sm">{new Date(r.created_at).toLocaleString()}</div>
+
+      <div>
+        <label className="text-xs text-gray-600">Status</label>
+        <select
+          className="border p-2 rounded-xl w-full"
+          value={status}
+          onChange={(e) => setStatus(e.target.value)}
+        >
+          <option value="OPEN">OPEN</option>
+          <option value="CLOSED">CLOSED</option>
+        </select>
+      </div>
+
+      <div>
+        <label className="text-xs text-gray-600">Odometer</label>
+        <input
+          type="number"
+          className="border p-2 rounded-xl w-full"
+          value={odo}
+          onChange={(e) => setOdo(parseInt(e.target.value || '0', 10))}
+        />
+      </div>
+
+      <div className="md:col-span-2">
+        <label className="text-xs text-gray-600">Summary</label>
+        <input
+          className="border p-2 rounded-xl w-full"
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+        />
+      </div>
+
+      <div className="md:col-span-6 flex items-center gap-3 pt-1">
+        <button
+          className="border rounded-xl px-3 py-1"
+          onClick={save}
+          disabled={saving}
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+
+        <button
+          className="text-red-600 underline text-sm"
+          onClick={() => onDelete(r.id)}
+        >
+          Delete
+        </button>
+
+        <div className="text-xs text-gray-600 ml-auto">
+          Driver: {r.driver?.name ?? '—'}
+        </div>
+      </div>
+    </div>
   )
 }
