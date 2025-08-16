@@ -653,7 +653,61 @@ async def upload_photos(defect_id: int, files: List[UploadFile] = File(...), cap
     db.commit()
     for p in saved: db.refresh(p)
     return saved
+# ---- DELETE a defect (and its photos) ----
+@app.delete("/defects/{defect_id}", status_code=204)
+def delete_defect(
+    defect_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    # mechanics, managers, admins may delete
+    if user.role not in ["mechanic", "manager", "admin"]:
+        raise HTTPException(403, "Insufficient permissions")
+    d = db.get(Defect, defect_id)
+    if not d:
+        return
 
+    # remove photo files from disk (best-effort)
+    for p in d.photos:
+        try:
+            # paths are like "/uploads/filename.jpg"
+            rel = p.path.lstrip("/")
+            if not os.path.isabs(rel):
+                rel = os.path.join(".", rel)
+            if os.path.exists(rel):
+                os.remove(rel)
+        except Exception:
+            pass
+
+    db.delete(d)
+    db.commit()
+
+# ---- DELETE a single photo ----
+@app.delete("/photos/{photo_id}", status_code=204)
+def delete_photo(
+    photo_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    if user.role not in ["mechanic", "manager", "admin"]:
+        raise HTTPException(403, "Insufficient permissions")
+    p = db.get(Photo, photo_id)
+    if not p:
+        return
+
+    # best-effort remove file
+    try:
+        rel = p.path.lstrip("/")
+        if not os.path.isabs(rel):
+            rel = os.path.join(".", rel)
+        if os.path.exists(rel):
+            os.remove(rel)
+    except Exception:
+        pass
+
+    db.delete(p)
+    db.commit()
+    
 # ----------------- PM endpoints -----------------
 def pm_status_for(truck: Truck, db: Session) -> dict:
     odom = truck.odometer or 0
