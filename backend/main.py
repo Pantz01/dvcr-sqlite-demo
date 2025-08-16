@@ -16,6 +16,8 @@ DB_URL = os.getenv("DVCR_DB", "sqlite:///./dvcr.db")
 UPLOAD_DIR = os.getenv("DVCR_UPLOAD_DIR", "uploads")
 JWT_SECRET = os.getenv("DVCR_JWT_SECRET", "dev-secret-change-me")
 JWT_EXPIRE_MINUTES = int(os.getenv("DVCR_JWT_EXPIRE_MINUTES", "43200"))  # 30 days
+PM_OIL_SOON_MILES = int(os.getenv("DVCR_PM_OIL_SOON_MILES", "5000"))
+PM_CHASSIS_SOON_MILES = int(os.getenv("DVCR_PM_CHASSIS_SOON_MILES", "3000"))
 
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
@@ -57,6 +59,19 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     role = Column(String, nullable=False)  # driver | mechanic | manager | admin
     password_hash = Column(String, nullable=True)
+
+class PMAlert(BaseModel):
+    truck_id: int
+    truck_number: str
+    odometer: int
+    oil_next_due: int
+    oil_miles_remaining: int
+    chassis_next_due: int
+    chassis_miles_remaining: int
+    oil_due_soon: bool
+    chassis_due_soon: bool
+    class Config:
+        from_attributes = True    
 
 class Truck(Base):
     __tablename__ = "trucks"
@@ -330,6 +345,39 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 async def me(user: User = Depends(require_user)):
     return user
 
+@app.get("/alerts/pm", response_model=List[PMAlert])
+def pm_alerts(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    # managers/admins only
+    require_role(user, ["manager", "admin"])
+
+    results: List[PMAlert] = []
+    trucks = db.query(Truck).filter(Truck.active == True).all()
+
+    for t in trucks:
+        s = pm_status_for(t, db)
+        oil_soon = s["oil_miles_remaining"] <= PM_OIL_SOON_MILES
+        ch_soon = s["chassis_miles_remaining"] <= PM_CHASSIS_SOON_MILES
+        if oil_soon or ch_soon:
+            results.append(PMAlert(
+                truck_id=t.id,
+                truck_number=t.number,
+                odometer=s["odometer"],
+                oil_next_due=s["oil_next_due"],
+                oil_miles_remaining=s["oil_miles_remaining"],
+                chassis_next_due=s["chassis_next_due"],
+                chassis_miles_remaining=s["chassis_miles_remaining"],
+                oil_due_soon=oil_soon,
+                chassis_due_soon=ch_soon,
+            ))
+    # sort by the most urgent (fewest miles remaining)
+    results.sort(key=lambda r: min(
+        r.oil_miles_remaining if r.oil_due_soon else 10**9,
+        r.chassis_miles_remaining if r.chassis_due_soon else 10**9
+    ))
+    return results
 # ---- Users admin endpoints (search/pagination/sort + CRUD) ----
 @app.get("/users", response_model=List[UserOut])
 def users_list(
