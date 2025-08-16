@@ -72,7 +72,7 @@ function ManageReportsInner() {
   const [newOdo, setNewOdo] = useState<number>(0)
   const [newSummary, setNewSummary] = useState('')
 
-  // which report row is expanded (to load defects/photos only when needed)
+  // which report row is expanded
   const [openId, setOpenId] = useState<number | null>(null)
   const [loadingReport, setLoadingReport] = useState(false)
 
@@ -132,14 +132,12 @@ function ManageReportsInner() {
     const updated = await r.json()
     setReports(prev => prev.map(x => x.id === id ? updated : x))
     if (patch.odometer !== undefined) {
-      // refresh truck to reflect higher odometer if updated
       loadTruck()
     }
   }
 
   async function deleteReport(id: number) {
     if (!confirm('Delete this report? This will also remove its defects, notes, and photos.')) return
-    // Requires DELETE /reports/{id} in backend
     const r = await fetch(`${API}/reports/${id}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok && r.status !== 204) { alert(await r.text()); return }
     setReports(prev => prev.filter(x => x.id !== id))
@@ -149,7 +147,6 @@ function ManageReportsInner() {
   async function toggleOpen(id: number) {
     if (openId === id) { setOpenId(null); return }
     setOpenId(id)
-    // lazily load full report details (defects + photos)
     setLoadingReport(true)
     const r = await fetch(`${API}/reports/${id}`, { headers: authHeaders() })
     setLoadingReport(false)
@@ -166,12 +163,7 @@ function ManageReportsInner() {
       body: JSON.stringify(d),
     })
     if (!r.ok) { alert(await r.text()); return }
-    // reload that report to get photos/defects fresh
-    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
-    if (rr.ok) {
-      const full = await rr.json()
-      setReports(prev => prev.map(x => x.id === reportId ? full : x))
-    }
+    await reloadReport(reportId)
   }
 
   async function patchDefect(reportId: number, defectId: number, patch: Partial<Defect>) {
@@ -184,27 +176,38 @@ function ManageReportsInner() {
       }),
     })
     if (!r.ok) { alert(await r.text()); return }
-    // reload that report
-    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
-    if (rr.ok) {
-      const full = await rr.json()
-      setReports(prev => prev.map(x => x.id === reportId ? full : x))
-    }
+    await reloadReport(reportId)
+  }
+
+  async function deleteDefect(reportId: number, defectId: number) {
+    if (!confirm('Delete this defect (and its photos)?')) return
+    const r = await fetch(`${API}/defects/${defectId}`, { method: 'DELETE', headers: authHeaders() })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    await reloadReport(reportId)
+  }
+
+  async function deletePhoto(reportId: number, photoId: number) {
+    if (!confirm('Delete this photo?')) return
+    const r = await fetch(`${API}/photos/${photoId}`, { method: 'DELETE', headers: authHeaders() })
+    if (!r.ok && r.status !== 204) { alert(await r.text()); return }
+    await reloadReport(reportId)
   }
 
   async function uploadPhotos(reportId: number, defectId: number, files: FileList, caption?: string) {
     if (!files || files.length === 0) return
     const fd = new FormData()
-    // API: files field name must be "files"
     Array.from(files).forEach(f => fd.append('files', f))
     if (caption) fd.append('captions', caption)
     const r = await fetch(`${API}/defects/${defectId}/photos`, {
       method: 'POST',
-      headers: authHeaders(), // do NOT set content-type for FormData
+      headers: authHeaders(),
       body: fd,
     })
     if (!r.ok) { alert(await r.text()); return }
-    // reload report
+    await reloadReport(reportId)
+  }
+
+  async function reloadReport(reportId: number) {
     const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
     if (rr.ok) {
       const full = await rr.json()
@@ -298,6 +301,8 @@ function ManageReportsInner() {
                 onAddDefect={addDefect}
                 onPatchDefect={patchDefect}
                 onUploadPhotos={uploadPhotos}
+                onDeleteDefect={deleteDefect}
+                onDeletePhoto={deletePhoto}
               />
             ))}
           </div>
@@ -317,6 +322,8 @@ function ReportRow({
   onAddDefect,
   onPatchDefect,
   onUploadPhotos,
+  onDeleteDefect,
+  onDeletePhoto,
 }: {
   r: Report
   isOpen: boolean
@@ -327,6 +334,8 @@ function ReportRow({
   onAddDefect: (reportId: number, d: { component: string; severity: string; description?: string }) => void
   onPatchDefect: (reportId: number, defectId: number, patch: Partial<Defect>) => void
   onUploadPhotos: (reportId: number, defectId: number, files: FileList, caption?: string) => void
+  onDeleteDefect: (reportId: number, defectId: number) => void
+  onDeletePhoto: (reportId: number, photoId: number) => void
 }) {
   const [status, setStatus] = useState(r.status)
   const [summary, setSummary] = useState(r.summary || '')
@@ -430,6 +439,8 @@ function ReportRow({
                     d={d}
                     onPatch={(patch) => onPatchDefect(r.id, d.id, patch)}
                     onUpload={(files, caption) => onUploadPhotos(r.id, d.id, files, caption)}
+                    onDelete={() => onDeleteDefect(r.id, d.id)}
+                    onDeletePhoto={(photoId) => onDeletePhoto(r.id, photoId)}
                   />
                 ))}
                 {(r.defects ?? []).length === 0 && (
@@ -480,11 +491,15 @@ function DefectRow({
   d,
   onPatch,
   onUpload,
+  onDelete,
+  onDeletePhoto,
 }: {
   rId: number
   d: Defect
   onPatch: (patch: Partial<Defect>) => void
   onUpload: (files: FileList, caption?: string) => void
+  onDelete: () => void
+  onDeletePhoto: (photoId: number) => void
 }) {
   const [desc, setDesc] = useState(d.description ?? '')
   const [resolved, setResolved] = useState(d.resolved)
@@ -499,7 +514,7 @@ function DefectRow({
 
   return (
     <div className="border rounded-xl p-3">
-      <div className="grid md:grid-cols-6 gap-2 items-start">
+      <div className="grid md:grid-cols-7 gap-2 items-start">
         <div className="text-sm font-medium md:col-span-2">
           {d.component} <span className="text-xs text-gray-600">({d.severity})</span>
         </div>
@@ -527,6 +542,9 @@ function DefectRow({
           <button className="border rounded-xl px-3 py-1" onClick={save} disabled={saving}>
             {saving ? 'Saving…' : 'Save'}
           </button>
+          <button className="text-red-600 underline text-xs" onClick={onDelete}>
+            Delete defect
+          </button>
         </div>
       </div>
 
@@ -535,21 +553,22 @@ function DefectRow({
         <div className="text-sm font-medium mb-1">Photos</div>
         <div className="flex flex-wrap gap-3">
           {(d.photos ?? []).map(p => (
-            <a
-              key={p.id}
-              href={p.path}
-              target="_blank"
-              rel="noreferrer"
-              className="block"
-              title={p.caption || ''}
-            >
+            <div key={p.id} className="flex flex-col items-center gap-1">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={p.path}
-                alt={p.caption || 'photo'}
-                className="h-20 w-28 object-cover rounded-lg border"
-              />
-            </a>
+              <a href={p.path} target="_blank" rel="noreferrer" title={p.caption || ''}>
+                <img
+                  src={p.path}
+                  alt={p.caption || 'photo'}
+                  className="h-20 w-28 object-cover rounded-lg border"
+                />
+              </a>
+              <button
+                className="text-red-600 underline text-[11px]"
+                onClick={() => onDeletePhoto(p.id)}
+              >
+                Delete photo
+              </button>
+            </div>
           ))}
           {(d.photos ?? []).length === 0 && (
             <div className="text-xs text-gray-500">No photos.</div>
@@ -574,9 +593,7 @@ function DefectRow({
               className="hidden"
               onChange={(e) => {
                 if (e.target.files) onUpload(e.target.files, caption)
-                // reset caption after upload
                 setCaption('')
-                // reset input value so same file can be re-selected later
                 e.currentTarget.value = ''
               }}
             />
