@@ -378,6 +378,7 @@ def pm_alerts(
         r.chassis_miles_remaining if r.chassis_due_soon else 10**9
     ))
     return results
+
 # ---- Users admin endpoints (search/pagination/sort + CRUD) ----
 @app.get("/users", response_model=List[UserOut])
 def users_list(
@@ -518,9 +519,31 @@ def delete_truck(
     db.delete(t)
     db.commit()
 
+# >>> CHANGED: reports list supports filter + pagination and returns X-Total-Count
 @app.get("/trucks/{truck_id}/reports", response_model=List[ReportOut])
-def list_reports(truck_id: int, db: Session = Depends(get_db)):
-    return db.query(Report).filter(Report.truck_id == truck_id).order_by(Report.created_at.desc()).all()
+def list_reports(
+    truck_id: int,
+    response: Response,
+    type: Optional[str] = None,  # 'pre' | 'post' (optional)
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Report).filter(Report.truck_id == truck_id).order_by(Report.created_at.desc())
+    if type in ("pre", "post"):
+        q = q.filter(Report.type == type)
+
+    total = q.count()
+    items = q.offset(skip).limit(limit).all()
+
+    # eager-load nested collections
+    for r in items:
+        _ = r.defects, r.notes
+        for d in r.defects:
+            _ = d.photos
+
+    response.headers["X-Total-Count"] = str(total)
+    return items
 
 @app.post("/trucks/{truck_id}/reports", response_model=ReportOut)
 def create_report(truck_id: int, payload: ReportIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -542,21 +565,48 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
     for d in r.defects: _ = d.photos
     return r
 
+# >>> CHANGED: ReportPatch supports 'type'
 class ReportPatch(BaseModel):
     status: Optional[str] = None
     summary: Optional[str] = None
     odometer: Optional[int] = None
+    type: Optional[str] = None  # 'pre' | 'post'
 
+# >>> CHANGED: patch_report can update 'type'
 @app.patch("/reports/{report_id}", response_model=ReportOut)
-def patch_report(report_id: int, payload: ReportPatch, user: User = Depends(require_user), db: Session = Depends(get_db)):
+def patch_report(
+    report_id: int,
+    payload: ReportPatch,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
     r = db.get(Report, report_id)
     if not r: raise HTTPException(404, "Report not found")
     if payload.status is not None:
         require_role(user, ["manager", "mechanic", "admin"])
         r.status = payload.status
-    if payload.summary is not None: r.summary = payload.summary
-    if payload.odometer is not None: r.odometer = payload.odometer
+    if payload.summary is not None:
+        r.summary = payload.summary
+    if payload.odometer is not None:
+        r.odometer = payload.odometer
+    if payload.type is not None:
+        if payload.type not in ("pre", "post"):
+            raise HTTPException(400, "type must be 'pre' or 'post'")
+        r.type = payload.type
     db.commit(); db.refresh(r); return r
+
+@app.delete("/reports/{report_id}", status_code=204)
+def delete_report(
+    report_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    r = db.get(Report, report_id)
+    if not r:
+        return
+    db.delete(r)
+    db.commit()
 
 @app.post("/reports/{report_id}/notes", response_model=NoteOut)
 def add_note(report_id: int, note: NoteIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -670,5 +720,3 @@ def delete_service(service_id: int, user: User = Depends(require_user), db: Sess
 @app.get("/health")
 def health():
     return {"ok": True}
-
-
