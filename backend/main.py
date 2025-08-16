@@ -2,12 +2,12 @@ import os, shutil
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, Boolean, Float, create_engine, Text
+    Column, Integer, String, DateTime, ForeignKey, Boolean, Float, create_engine, Text, or_
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
 
@@ -21,14 +21,16 @@ ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
     "https://resourceful-compassion-production.up.railway.app",
-    # add your frontend URL(s) here if different, e.g. "https://<your-frontend>.up.railway.app"
+    # add more frontend URLs as needed (e.g. your Railway frontend)
 ]
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ----------------- App -----------------
 app = FastAPI(title="DVCR API")
 
-app.add_mmiddleware = app.add_middleware  # alias for clarity if you search logs
+# alias purely for log searches (optional)
+app.add_mmiddleware = app.add_middleware  # type: ignore[attr-defined]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -53,7 +55,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
-    role = Column(String, nullable=False)  # driver | manager | mechanic | admin
+    role = Column(String, nullable=False)  # driver | mechanic | manager | admin
     password_hash = Column(String, nullable=True)
 
 class Truck(Base):
@@ -63,7 +65,7 @@ class Truck(Base):
     vin = Column(String, nullable=True)
     active = Column(Boolean, default=True)
     odometer = Column(Integer, default=0)
-    # cascade ensures deleting a truck removes its reports & service rows
+    # cascades ensure deleting a truck removes child rows
     reports = relationship("Report", back_populates="truck", cascade="all, delete-orphan")
     services = relationship("ServiceRecord", back_populates="truck", cascade="all, delete-orphan")
 
@@ -285,7 +287,7 @@ class ServiceIn(BaseModel):
     odometer: int
     notes: Optional[str] = None
 
-# ---- NEW: User admin schemas ----
+# ---- User admin schemas ----
 class UserCreate(BaseModel):
     name: str
     email: str
@@ -298,7 +300,7 @@ class UserPatch(BaseModel):
     role: Optional[str] = None
     password: Optional[str] = None
 
-# ---- NEW: Truck admin / service schemas ----
+# ---- Truck admin / service schemas ----
 class TruckPatch(BaseModel):
     number: Optional[str] = None
     vin: Optional[str] = None
@@ -328,11 +330,34 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 async def me(user: User = Depends(require_user)):
     return user
 
-# ---- NEW: Users admin endpoints ----
+# ---- Users admin endpoints (search/pagination/sort + CRUD) ----
 @app.get("/users", response_model=List[UserOut])
-def users_list(user: User = Depends(require_user), db: Session = Depends(get_db)):
+def users_list(
+    response: Response,
+    q: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 25,
+    sort: str = "name",
+    order: str = "asc",
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
     require_role(user, ["manager", "admin"])
-    return db.query(User).order_by(User.name).all()
+
+    query = db.query(User)
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.filter(or_(User.name.like(like), User.email.like(like), User.role.like(like)))
+
+    total = query.count()
+
+    col = getattr(User, sort, User.name)
+    if order.lower() == "desc":
+        col = col.desc()
+
+    items = query.order_by(col).offset(skip).limit(limit).all()
+    response.headers["X-Total-Count"] = str(total)
+    return items
 
 @app.post("/users", response_model=UserOut)
 def users_create(payload: UserCreate, user: User = Depends(require_user), db: Session = Depends(get_db)):
@@ -401,7 +426,7 @@ def get_truck(truck_id: int, db: Session = Depends(get_db)):
     if not t: raise HTTPException(404, "Truck not found")
     return t
 
-# ---- NEW: update a truck
+# Update truck
 @app.patch("/trucks/{truck_id}", response_model=TruckOut)
 def patch_truck(
     truck_id: int,
@@ -431,7 +456,7 @@ def patch_truck(
     db.refresh(t)
     return t
 
-# ---- NEW: delete a truck (cascades to reports/services/defects/notes/photos)
+# Delete truck (cascades to reports/services/defects/notes/photos)
 @app.delete("/trucks/{truck_id}", status_code=204)
 def delete_truck(
     truck_id: int,
@@ -464,6 +489,7 @@ def create_report(truck_id: int, payload: ReportIn, user: User = Depends(require
 def get_report(report_id: int, db: Session = Depends(get_db)):
     r = db.get(Report, report_id)
     if not r: raise HTTPException(404, "Report not found")
+    # eager-load collections
     _ = r.defects, r.notes
     for d in r.defects: _ = d.photos
     return r
@@ -578,12 +604,10 @@ def add_service(truck_id: int, svc: ServiceIn, user: User = Depends(require_user
     db.commit()
     return pm_status_for(truck, db)
 
-# ---- NEW: typed service list for admin UI
 @app.get("/trucks/{truck_id}/service", response_model=List[ServiceOut])
 def list_service(truck_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
     return db.query(ServiceRecord).filter_by(truck_id=truck_id).order_by(ServiceRecord.created_at.desc()).all()
 
-# ---- NEW: delete a service record
 @app.delete("/service/{service_id}", status_code=204)
 def delete_service(service_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
     if user.role not in ["manager", "mechanic", "admin"]:
@@ -598,4 +622,5 @@ def delete_service(service_id: int, user: User = Depends(require_user), db: Sess
 @app.get("/health")
 def health():
     return {"ok": True}
+
 
