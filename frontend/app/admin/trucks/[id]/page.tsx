@@ -15,6 +15,25 @@ type Truck = {
   odometer: number
 }
 
+type Photo = {
+  id: number
+  path: string
+  caption?: string | null
+}
+
+type Defect = {
+  id: number
+  component: string
+  severity: string
+  description?: string | null
+  x?: number | null
+  y?: number | null
+  resolved: boolean
+  resolved_by_id?: number | null
+  resolved_at?: string | null
+  photos: Photo[]
+}
+
 type Report = {
   id: number
   created_at: string
@@ -24,6 +43,8 @@ type Report = {
   type: 'pre' | 'post'
   driver: { id: number; name: string; email: string; role: string }
   truck: Truck
+  defects?: Defect[]
+  notes?: any[]
 }
 
 export default function ManageReportsPage() {
@@ -50,6 +71,10 @@ function ManageReportsInner() {
   const [newType, setNewType] = useState<'pre' | 'post'>('pre')
   const [newOdo, setNewOdo] = useState<number>(0)
   const [newSummary, setNewSummary] = useState('')
+
+  // which report row is expanded (to load defects/photos only when needed)
+  const [openId, setOpenId] = useState<number | null>(null)
+  const [loadingReport, setLoadingReport] = useState(false)
 
   useEffect(() => {
     loadTruck()
@@ -88,8 +113,9 @@ function ManageReportsInner() {
     setBusy(false)
     if (!r.ok) { alert(await r.text()); return }
     setNewSummary('')
-    loadReports()
-    loadTruck()
+    setNewOdo(0)
+    await loadReports()
+    await loadTruck()
   }
 
   async function saveReport(id: number, patch: Partial<Report>) {
@@ -113,10 +139,77 @@ function ManageReportsInner() {
 
   async function deleteReport(id: number) {
     if (!confirm('Delete this report? This will also remove its defects, notes, and photos.')) return
-    // If your backend is missing DELETE /reports/{id}, add it there.
+    // Requires DELETE /reports/{id} in backend
     const r = await fetch(`${API}/reports/${id}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok && r.status !== 204) { alert(await r.text()); return }
     setReports(prev => prev.filter(x => x.id !== id))
+    if (openId === id) setOpenId(null)
+  }
+
+  async function toggleOpen(id: number) {
+    if (openId === id) { setOpenId(null); return }
+    setOpenId(id)
+    // lazily load full report details (defects + photos)
+    setLoadingReport(true)
+    const r = await fetch(`${API}/reports/${id}`, { headers: authHeaders() })
+    setLoadingReport(false)
+    if (!r.ok) { alert(await r.text()); return }
+    const full = await r.json() as Report
+    setReports(prev => prev.map(x => x.id === id ? full : x))
+  }
+
+  // defect actions
+  async function addDefect(reportId: number, d: { component: string; severity: string; description?: string }) {
+    const r = await fetch(`${API}/reports/${reportId}/defects`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify(d),
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    // reload that report to get photos/defects fresh
+    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
+    if (rr.ok) {
+      const full = await rr.json()
+      setReports(prev => prev.map(x => x.id === reportId ? full : x))
+    }
+  }
+
+  async function patchDefect(reportId: number, defectId: number, patch: Partial<Defect>) {
+    const r = await fetch(`${API}/defects/${defectId}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        description: patch.description,
+        resolved: patch.resolved,
+      }),
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    // reload that report
+    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
+    if (rr.ok) {
+      const full = await rr.json()
+      setReports(prev => prev.map(x => x.id === reportId ? full : x))
+    }
+  }
+
+  async function uploadPhotos(reportId: number, defectId: number, files: FileList, caption?: string) {
+    if (!files || files.length === 0) return
+    const fd = new FormData()
+    // API: files field name must be "files"
+    Array.from(files).forEach(f => fd.append('files', f))
+    if (caption) fd.append('captions', caption)
+    const r = await fetch(`${API}/defects/${defectId}/photos`, {
+      method: 'POST',
+      headers: authHeaders(), // do NOT set content-type for FormData
+      body: fd,
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    // reload report
+    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
+    if (rr.ok) {
+      const full = await rr.json()
+      setReports(prev => prev.map(x => x.id === reportId ? full : x))
+    }
   }
 
   return (
@@ -194,7 +287,18 @@ function ManageReportsInner() {
         ) : (
           <div className="divide-y">
             {filtered.map(r => (
-              <ReportRow key={r.id} r={r} onSave={saveReport} onDelete={deleteReport} />
+              <ReportRow
+                key={r.id}
+                r={r}
+                isOpen={openId === r.id}
+                loadingDetails={loadingReport && openId === r.id}
+                onToggle={() => toggleOpen(r.id)}
+                onSave={saveReport}
+                onDelete={deleteReport}
+                onAddDefect={addDefect}
+                onPatchDefect={patchDefect}
+                onUploadPhotos={uploadPhotos}
+              />
             ))}
           </div>
         )}
@@ -205,17 +309,34 @@ function ManageReportsInner() {
 
 function ReportRow({
   r,
+  isOpen,
+  loadingDetails,
+  onToggle,
   onSave,
   onDelete,
+  onAddDefect,
+  onPatchDefect,
+  onUploadPhotos,
 }: {
   r: Report
+  isOpen: boolean
+  loadingDetails: boolean
+  onToggle: () => void
   onSave: (id: number, patch: Partial<Report>) => void
   onDelete: (id: number) => void
+  onAddDefect: (reportId: number, d: { component: string; severity: string; description?: string }) => void
+  onPatchDefect: (reportId: number, defectId: number, patch: Partial<Defect>) => void
+  onUploadPhotos: (reportId: number, defectId: number, files: FileList, caption?: string) => void
 }) {
   const [status, setStatus] = useState(r.status)
   const [summary, setSummary] = useState(r.summary || '')
   const [odo, setOdo] = useState<number>(r.odometer ?? 0)
   const [saving, setSaving] = useState(false)
+
+  // new defect form
+  const [comp, setComp] = useState('')
+  const [sev, setSev] = useState<'minor' | 'major' | 'critical'>('minor')
+  const [desc, setDesc] = useState('')
 
   async function save() {
     setSaving(true)
@@ -223,60 +344,243 @@ function ReportRow({
     setSaving(false)
   }
 
+  async function addDefectClick() {
+    if (!comp.trim()) { alert('Component is required'); return }
+    await onAddDefect(r.id, { component: comp.trim(), severity: sev, description: desc.trim() || undefined })
+    setComp(''); setSev('minor'); setDesc('')
+  }
+
   return (
-    <div className="p-3 grid md:grid-cols-6 gap-3 items-center">
-      <div className="text-xs uppercase">{r.type}</div>
-      <div className="text-sm">{new Date(r.created_at).toLocaleString()}</div>
+    <div className="p-3">
+      <div className="grid md:grid-cols-6 gap-3 items-center">
+        <div className="text-xs uppercase">{r.type}</div>
+        <div className="text-sm">{new Date(r.created_at).toLocaleString()}</div>
 
-      <div>
-        <label className="text-xs text-gray-600">Status</label>
-        <select
-          className="border p-2 rounded-xl w-full"
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-        >
-          <option value="OPEN">OPEN</option>
-          <option value="CLOSED">CLOSED</option>
-        </select>
+        <div>
+          <label className="text-xs text-gray-600">Status</label>
+          <select
+            className="border p-2 rounded-xl w-full"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+          >
+            <option value="OPEN">OPEN</option>
+            <option value="CLOSED">CLOSED</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs text-gray-600">Odometer</label>
+          <input
+            type="number"
+            className="border p-2 rounded-xl w-full"
+            value={odo}
+            onChange={(e) => setOdo(parseInt(e.target.value || '0', 10))}
+          />
+        </div>
+
+        <div className="md:col-span-2">
+          <label className="text-xs text-gray-600">Summary</label>
+          <input
+            className="border p-2 rounded-xl w-full"
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+          />
+        </div>
+
+        <div className="md:col-span-6 flex items-center gap-3 pt-1">
+          <button
+            className="border rounded-xl px-3 py-1"
+            onClick={save}
+            disabled={saving}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+
+          <button
+            className="text-red-600 underline text-sm"
+            onClick={() => onDelete(r.id)}
+          >
+            Delete
+          </button>
+
+          <button
+            className="underline text-sm ml-auto"
+            onClick={onToggle}
+          >
+            {isOpen ? 'Hide details' : 'Show details'}
+          </button>
+        </div>
       </div>
 
-      <div>
-        <label className="text-xs text-gray-600">Odometer</label>
-        <input
-          type="number"
-          className="border p-2 rounded-xl w-full"
-          value={odo}
-          onChange={(e) => setOdo(parseInt(e.target.value || '0', 10))}
-        />
+      {/* Expanded details: defects + photos */}
+      {isOpen && (
+        <div className="mt-4 rounded-xl border p-3">
+          {loadingDetails ? (
+            <div className="text-sm text-gray-500">Loading details…</div>
+          ) : (
+            <>
+              <div className="font-semibold mb-2">Defects</div>
+
+              {/* Existing defects */}
+              <div className="space-y-3">
+                {(r.defects ?? []).map(d => (
+                  <DefectRow
+                    key={d.id}
+                    rId={r.id}
+                    d={d}
+                    onPatch={(patch) => onPatchDefect(r.id, d.id, patch)}
+                    onUpload={(files, caption) => onUploadPhotos(r.id, d.id, files, caption)}
+                  />
+                ))}
+                {(r.defects ?? []).length === 0 && (
+                  <div className="text-sm text-gray-500">No defects for this report.</div>
+                )}
+              </div>
+
+              {/* Add defect */}
+              <div className="mt-4 border rounded-xl p-3 space-y-2">
+                <div className="font-medium">Add Defect</div>
+                <div className="grid sm:grid-cols-5 gap-2">
+                  <input
+                    className="border p-2 rounded-xl"
+                    placeholder="Component (e.g., Brakes)"
+                    value={comp}
+                    onChange={(e) => setComp(e.target.value)}
+                  />
+                  <select
+                    className="border p-2 rounded-xl"
+                    value={sev}
+                    onChange={(e) => setSev(e.target.value as any)}
+                  >
+                    <option value="minor">minor</option>
+                    <option value="major">major</option>
+                    <option value="critical">critical</option>
+                  </select>
+                  <input
+                    className="border p-2 rounded-xl sm:col-span-2"
+                    placeholder="Description (optional)"
+                    value={desc}
+                    onChange={(e) => setDesc(e.target.value)}
+                  />
+                  <button className="border rounded-xl p-2" onClick={addDefectClick}>
+                    Add defect
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DefectRow({
+  rId,
+  d,
+  onPatch,
+  onUpload,
+}: {
+  rId: number
+  d: Defect
+  onPatch: (patch: Partial<Defect>) => void
+  onUpload: (files: FileList, caption?: string) => void
+}) {
+  const [desc, setDesc] = useState(d.description ?? '')
+  const [resolved, setResolved] = useState(d.resolved)
+  const [saving, setSaving] = useState(false)
+  const [caption, setCaption] = useState('')
+
+  async function save() {
+    setSaving(true)
+    await onPatch({ description: desc, resolved })
+    setSaving(false)
+  }
+
+  return (
+    <div className="border rounded-xl p-3">
+      <div className="grid md:grid-cols-6 gap-2 items-start">
+        <div className="text-sm font-medium md:col-span-2">
+          {d.component} <span className="text-xs text-gray-600">({d.severity})</span>
+        </div>
+
+        <div className="md:col-span-2">
+          <label className="text-xs text-gray-600">Description</label>
+          <input
+            className="border p-2 rounded-xl w-full"
+            value={desc}
+            onChange={(e) => setDesc(e.target.value)}
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            id={`res-${d.id}`}
+            type="checkbox"
+            checked={resolved}
+            onChange={(e) => setResolved(e.target.checked)}
+          />
+          <label htmlFor={`res-${d.id}`} className="text-sm">Resolved</label>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button className="border rounded-xl px-3 py-1" onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
       </div>
 
-      <div className="md:col-span-2">
-        <label className="text-xs text-gray-600">Summary</label>
-        <input
-          className="border p-2 rounded-xl w-full"
-          value={summary}
-          onChange={(e) => setSummary(e.target.value)}
-        />
-      </div>
+      {/* Photos */}
+      <div className="mt-3">
+        <div className="text-sm font-medium mb-1">Photos</div>
+        <div className="flex flex-wrap gap-3">
+          {(d.photos ?? []).map(p => (
+            <a
+              key={p.id}
+              href={p.path}
+              target="_blank"
+              rel="noreferrer"
+              className="block"
+              title={p.caption || ''}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={p.path}
+                alt={p.caption || 'photo'}
+                className="h-20 w-28 object-cover rounded-lg border"
+              />
+            </a>
+          ))}
+          {(d.photos ?? []).length === 0 && (
+            <div className="text-xs text-gray-500">No photos.</div>
+          )}
+        </div>
 
-      <div className="md:col-span-6 flex items-center gap-3 pt-1">
-        <button
-          className="border rounded-xl px-3 py-1"
-          onClick={save}
-          disabled={saving}
-        >
-          {saving ? 'Saving…' : 'Save'}
-        </button>
-
-        <button
-          className="text-red-600 underline text-sm"
-          onClick={() => onDelete(r.id)}
-        >
-          Delete
-        </button>
-
-        <div className="text-xs text-gray-600 ml-auto">
-          Driver: {r.driver?.name ?? '—'}
+        {/* Upload */}
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            placeholder="Caption (optional)"
+            className="border p-2 rounded-xl"
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+          />
+          <label className="cursor-pointer border rounded-xl px-3 py-2">
+            Upload photos
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) onUpload(e.target.files, caption)
+                // reset caption after upload
+                setCaption('')
+                // reset input value so same file can be re-selected later
+                e.currentTarget.value = ''
+              }}
+            />
+          </label>
         </div>
       </div>
     </div>
