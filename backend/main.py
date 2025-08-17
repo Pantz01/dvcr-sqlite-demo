@@ -792,6 +792,52 @@ def add_defect(report_id: int, d: DefectIn, user: User = Depends(require_user), 
     defect = Defect(report_id=report_id, component=d.component, severity=d.severity, description=d.description, x=d.x, y=d.y)
     db.add(defect); db.commit(); db.refresh(defect); return defect
 
+# Create a defect AND upload photos in one multipart request
+@app.post("/reports/{report_id}/defects-with-photos", response_model=DefectOut)
+async def add_defect_with_photos(
+    report_id: int,
+    component: str = Form(...),
+    severity: str = Form("minor"),
+    description: Optional[str] = Form(None),
+    x: Optional[float] = Form(None),
+    y: Optional[float] = Form(None),
+    files: Optional[List[UploadFile]] = File(None),
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    r = db.get(Report, report_id)
+    if not r:
+        raise HTTPException(404, "Report not found")
+
+    defect = Defect(
+        report_id=report_id,
+        component=component,
+        severity=severity,
+        description=description,
+        x=x, y=y,
+    )
+    db.add(defect)
+    db.commit()
+    db.refresh(defect)
+
+    saved: List[Photo] = []
+    if files:
+        for f in files:
+            ts = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+            safe_name = f"{defect.id}_{ts}_{f.filename}"
+            out_path = os.path.join(UPLOAD_DIR, safe_name)
+            with open(out_path, "wb") as out:
+                shutil.copyfileobj(f.file, out)
+            p = Photo(defect_id=defect.id, path=f"/uploads/{safe_name}", caption=None)
+            db.add(p); saved.append(p)
+        db.commit()
+        for p in saved:
+            db.refresh(p)
+
+    # Eager-load photos for response
+    _ = defect.photos
+    return defect
+
 @app.patch("/defects/{defect_id}", response_model=DefectOut)
 def patch_defect(defect_id: int, payload: DefectPatch, user: User = Depends(require_user), db: Session = Depends(get_db)):
     d = db.get(Defect, defect_id)
