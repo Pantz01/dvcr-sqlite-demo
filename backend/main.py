@@ -1,4 +1,4 @@
-import os, shutil 
+import os, shutil
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -10,6 +10,7 @@ from sqlalchemy import (
     Column, Integer, String, DateTime, ForeignKey, Boolean, Float, create_engine, Text, or_
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship, Session
+import json  # ⬅️ NEW
 
 # ----------------- Config / Env -----------------
 DB_URL = os.getenv("DVCR_DB", "sqlite:///./dvcr.db")
@@ -142,6 +143,24 @@ class ServiceRecord(Base):
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     truck = relationship("Truck", back_populates="services")
+
+# ----------------- NEW: Role model -----------------
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    permissions_json = Column(Text, nullable=False, default="[]")
+
+    @property
+    def permissions(self) -> List[str]:
+        try:
+            return json.loads(self.permissions_json or "[]")
+        except Exception:
+            return []
+
+    @permissions.setter
+    def permissions(self, value: Optional[List[str]]):
+        self.permissions_json = json.dumps(value or [])
 
 # ----------------- NEW: PM Appointment model -----------------
 class PMAppointment(Base):
@@ -345,6 +364,22 @@ class ServiceOut(BaseModel):
     class Config:
         from_attributes = True
 
+# ----------------- NEW: Role schemas -----------------
+class RoleCreate(BaseModel):
+    name: str = Field(..., max_length=100)
+    permissions: List[str] = Field(default_factory=list)
+
+class RoleOut(BaseModel):
+    id: int
+    name: str
+    permissions: List[str]
+    class Config:
+        from_attributes = True
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=100)
+    permissions: Optional[List[str]] = None
+
 # ----------------- NEW: PM Appointment schemas -----------------
 class PMAppointmentIn(BaseModel):
     truck_id: int
@@ -380,6 +415,52 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
 @app.get("/me", response_model=UserOut)
 async def me(user: User = Depends(require_user)):
     return user
+
+# ----------------- NEW: Roles CRUD -----------------
+@app.get("/roles", response_model=List[RoleOut])
+def list_roles(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["admin"])  # admin-only
+    roles = db.query(Role).order_by(Role.name.asc()).all()
+    return [RoleOut(id=r.id, name=r.name, permissions=r.permissions) for r in roles]
+
+@app.post("/roles", response_model=RoleOut, status_code=201)
+def create_role(payload: RoleCreate, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["admin"])
+    if db.query(Role).filter(Role.name == payload.name).first():
+        raise HTTPException(status_code=400, detail="Role name already exists")
+    r = Role(name=payload.name)
+    r.permissions = payload.permissions
+    db.add(r)
+    db.commit()
+    db.refresh(r)
+    return RoleOut(id=r.id, name=r.name, permissions=r.permissions)
+
+@app.patch("/roles/{role_id}", response_model=RoleOut)
+def update_role(role_id: int, payload: RoleUpdate, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["admin"])
+    r = db.query(Role).filter(Role.id == role_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if payload.name is not None:
+        exists = db.query(Role).filter(Role.name == payload.name, Role.id != role_id).first()
+        if exists:
+            raise HTTPException(status_code=400, detail="Role name already exists")
+        r.name = payload.name
+    if payload.permissions is not None:
+        r.permissions = payload.permissions
+    db.commit()
+    db.refresh(r)
+    return RoleOut(id=r.id, name=r.name, permissions=r.permissions)
+
+@app.delete("/roles/{role_id}", status_code=204)
+def delete_role(role_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    require_role(user, ["admin"])
+    r = db.query(Role).filter(Role.id == role_id).first()
+    if not r:
+        return Response(status_code=204)
+    db.delete(r)
+    db.commit()
+    return Response(status_code=204)
 
 @app.get("/alerts/pm", response_model=List[PMAlert])
 def pm_alerts(
