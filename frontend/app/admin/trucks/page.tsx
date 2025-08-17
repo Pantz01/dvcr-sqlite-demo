@@ -5,6 +5,7 @@ import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
 import Link from 'next/link'
+import * as XLSX from 'xlsx' // ⬅️ ADDED
 
 type Truck = {
   id: number
@@ -45,7 +46,7 @@ function AdminTrucksInner() {
   const [trucks, setTrucks] = useState<Truck[]>([])
   const [selected, setSelected] = useState<Truck | null>(null)
 
-  // 🔹 NEW: edit/lock + local form copy
+  // edit/lock + local form copy
   const [isEditing, setIsEditing] = useState(false)
   const [form, setForm] = useState<Truck | null>(null)
 
@@ -61,7 +62,7 @@ function AdminTrucksInner() {
     setTrucks(await r.json())
   }
 
-  // 🔹 Dirty check used when switching trucks mid-edit
+  // Dirty check when switching trucks mid-edit
   const isDirty =
     !!selected && !!form && (
       selected.number !== form.number ||
@@ -71,15 +72,14 @@ function AdminTrucksInner() {
     )
 
   async function selectTruck(t: Truck) {
-    // 🔹 Prevent state bleed: confirm if unsaved changes
     if (isEditing && isDirty) {
       const ok = confirm('You have unsaved changes. Discard and switch trucks?')
       if (!ok) return
     }
 
     setSelected(t)
-    setIsEditing(false)       // lock fields
-    setForm({ ...t })        // fresh local copy for controlled inputs
+    setIsEditing(false)
+    setForm({ ...t })
 
     setPm(null)
     setServices([])
@@ -89,7 +89,6 @@ function AdminTrucksInner() {
       .then(r => r.ok ? r.json() : []).then(setServices)
   }
 
-  // ⚠️ Kept for compatibility (not used by onBlur anymore)
   async function saveField(t: Truck, patch: Partial<Truck>) {
     const r = await fetch(`${API}/trucks/${t.id}`, {
       method: 'PATCH',
@@ -101,7 +100,7 @@ function AdminTrucksInner() {
     setTrucks(prev => prev.map(x => x.id === t.id ? updated : x))
     if (selected?.id === t.id) {
       setSelected(updated)
-      setForm({ ...updated }) // keep form in sync
+      setForm({ ...updated })
     }
     if (patch.odometer !== undefined) {
       const p = await fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
@@ -109,7 +108,6 @@ function AdminTrucksInner() {
     }
   }
 
-  // 🔹 NEW: Save all edits at once, then refresh PM/services
   async function saveEdits() {
     if (!form) return
     setBusy(true)
@@ -131,7 +129,6 @@ function AdminTrucksInner() {
     setForm({ ...updated })
     setIsEditing(false)
 
-    // refresh PM + services snapshot
     const p = await fetch(`${API}/trucks/${updated.id}/pm-next`, { headers: authHeaders() })
     if (p.ok) setPm(await p.json())
     const s = await fetch(`${API}/trucks/${updated.id}/service`, { headers: authHeaders() })
@@ -152,7 +149,6 @@ function AdminTrucksInner() {
     })
     setBusy(false)
     if (!r.ok) { alert(await r.text()); return }
-    // refresh PM + list
     selectTruck(truck)
   }
 
@@ -171,6 +167,56 @@ function AdminTrucksInner() {
     setSelected(null); setPm(null); setServices([]); setForm(null); setIsEditing(false)
     loadTrucks()
   }
+
+  // ⬇️⬇️⬇️ ADDED: Excel export helpers
+  function statusFromRemaining(remaining: number) {
+    if (remaining <= 0) return 'OVERDUE'
+    if (remaining <= 1000) return 'DUE SOON'
+    return 'OK'
+  }
+
+  async function exportAlertsExcel() {
+    const rows: any[] = []
+    for (const t of trucks) {
+      try {
+        const r = await fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
+        if (!r.ok) continue
+        const pmData: PM = await r.json()
+        rows.push({
+          'Truck Number': t.number,
+          'VIN': t.vin ?? '',
+          'Active': t.active ? 'Yes' : 'No',
+          'Odometer': pmData?.odometer ?? t.odometer ?? 0,
+          'Oil Next Due (mi)': pmData?.oil_next_due ?? '',
+          'Oil Miles Remaining': pmData?.oil_miles_remaining ?? '',
+          'Oil Status': statusFromRemaining(pmData?.oil_miles_remaining ?? 0),
+          'Chassis Next Due (mi)': pmData?.chassis_next_due ?? '',
+          'Chassis Miles Remaining': pmData?.chassis_miles_remaining ?? '',
+          'Chassis Status': statusFromRemaining(pmData?.chassis_miles_remaining ?? 0),
+        })
+      } catch {
+        // ignore failures for individual trucks
+      }
+    }
+
+    const ws = XLSX.utils.json_to_sheet(rows)
+    ;(ws as any)['!cols'] = [
+      { wch: 14 }, // Truck Number
+      { wch: 20 }, // VIN
+      { wch: 8 },  // Active
+      { wch: 12 }, // Odometer
+      { wch: 18 }, // Oil Next Due
+      { wch: 20 }, // Oil Miles Remaining
+      { wch: 12 }, // Oil Status
+      { wch: 21 }, // Chassis Next Due
+      { wch: 24 }, // Chassis Miles Remaining
+      { wch: 14 }, // Chassis Status
+    ]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'PM Alerts')
+    XLSX.writeFile(wb, 'truck_pm_alerts.xlsx')
+  }
+  // ⬆️⬆️⬆️ END ADDED
 
   return (
     <main className="p-6 space-y-6">
@@ -221,35 +267,44 @@ function AdminTrucksInner() {
           <div className="border rounded-2xl">
             <div className="p-3 font-semibold border-b flex items-center justify-between">
               <span>Details</span>
-              {selected && (
-                <div className="flex gap-2">
-                  {!isEditing ? (
+              <div className="flex gap-2">
+                {/* ⬇️ ADDED: Export button */}
+                <button
+                  className="px-3 py-1.5 border rounded-xl"
+                  onClick={exportAlertsExcel}
+                  title="Export PM alerts for all trucks to Excel"
+                >
+                  Export Alerts (Excel)
+                </button>
+                {/* ⬆️ ADDED */}
+
+                {selected && !isEditing && (
+                  <button
+                    className="px-3 py-1.5 border rounded-xl"
+                    onClick={() => setIsEditing(true)}
+                  >
+                    Edit
+                  </button>
+                )}
+                {selected && isEditing && (
+                  <>
                     <button
                       className="px-3 py-1.5 border rounded-xl"
-                      onClick={() => setIsEditing(true)}
+                      onClick={cancelEdits}
+                      disabled={busy}
                     >
-                      Edit
+                      Cancel
                     </button>
-                  ) : (
-                    <>
-                      <button
-                        className="px-3 py-1.5 border rounded-xl"
-                        onClick={cancelEdits}
-                        disabled={busy}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className="px-3 py-1.5 border rounded-xl bg-black text-white disabled:opacity-50"
-                        onClick={saveEdits}
-                        disabled={busy}
-                      >
-                        {busy ? 'Saving…' : 'Save'}
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+                    <button
+                      className="px-3 py-1.5 border rounded-xl bg-black text-white disabled:opacity-50"
+                      onClick={saveEdits}
+                      disabled={busy}
+                    >
+                      {busy ? 'Saving…' : 'Save'}
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {!selected ? (
