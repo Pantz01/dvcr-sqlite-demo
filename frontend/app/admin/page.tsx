@@ -1,5 +1,7 @@
 'use client'
+
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders, getUser } from '@/lib/api'
@@ -86,18 +88,18 @@ function AdminInner() {
       </div>
 
       <div className="grid md:grid-cols-3 gap-4">
-        <a href="/trucks" className="p-4 border rounded-2xl hover:bg-gray-50">
+        <Link href="/admin/trucks" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Trucks</div>
           <div className="text-sm text-gray-600">Manage fleet & reports</div>
-        </a>
-        <a href="/reports" className="p-4 border rounded-2xl hover:bg-gray-50">
+        </Link>
+        <Link href="/reports" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Reports</div>
-          <div className="text-sm text-gray-600">Browse DVCR history</div>
-        </a>
-        <a href="/admin" className="p-4 border rounded-2xl hover:bg-gray-50">
+          <div className="text-sm text-gray-600">Browse & manage issues</div>
+        </Link>
+        <Link href="/admin" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Users</div>
           <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
-        </a>
+        </Link>
       </div>
 
       {/* Quick Add User */}
