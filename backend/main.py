@@ -419,7 +419,7 @@ async def me(user: User = Depends(require_user)):
 # ----------------- NEW: Roles CRUD -----------------
 @app.get("/roles", response_model=List[RoleOut])
 def list_roles(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    require_role(user, ["admin"])  # admin-only
+    require_role(user, ["manager", "admin"])  # allow managers too
     roles = db.query(Role).order_by(Role.name.asc()).all()
     return [RoleOut(id=r.id, name=r.name, permissions=r.permissions) for r in roles]
 
