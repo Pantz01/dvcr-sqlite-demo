@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import RequireAuth from '@/components/RequireAuth'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
 
@@ -12,10 +12,17 @@ type Truck = {
   odometer: number
 }
 
+type Photo = {
+  id: number
+  path: string
+  caption?: string | null
+}
+
 type Defect = {
   id: number
   description?: string | null
   resolved: boolean
+  photos?: Photo[] // ← allow photos if backend includes them
 }
 
 type Report = {
@@ -48,6 +55,10 @@ function DriverTrucksInner() {
   const [odo, setOdo] = useState<number>(0)
   const [issue, setIssue] = useState('')
 
+  // NEW: hold chosen files and a ref to clear the input after upload
+  const [issueFiles, setIssueFiles] = useState<FileList | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+
   useEffect(() => { loadTrucks() }, [])
 
   async function loadTrucks() {
@@ -60,6 +71,8 @@ function DriverTrucksInner() {
     setSelected(t)
     setOdo(t.odometer ?? 0)
     setIssue('')
+    setIssueFiles(null)
+    if (fileRef.current) fileRef.current.value = '' // clear picker
     setActiveReport(null)
     setReports([])
     setLoading(true)
@@ -116,20 +129,79 @@ function DriverTrucksInner() {
     await reloadActiveReport(rep.id)
   }
 
-  // Add plain-text issue (defect)
+  // Helper: upload photos for a defect (existing endpoint)
+  async function uploadDefectPhotos(defectId: number, files: FileList) {
+    const fd = new FormData()
+    Array.from(files).forEach(f => fd.append('files', f))
+    const r = await fetch(`${API}/defects/${defectId}/photos`, {
+      method: 'POST',
+      headers: authHeaders(), // don't set Content-Type manually
+      body: fd,
+    })
+    if (!r.ok) throw new Error(await r.text())
+  }
+
+  // Add issue (defect) with optional photos
   async function addIssue() {
     const text = issue.trim()
-    if (!selected || !text) return
+    if (!selected || (!text && !issueFiles?.length)) return
     const rep = await ensureReport()
     if (!rep) return
-    const r = await fetch(`${API}/reports/${rep.id}/defects`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ component: 'general', severity: 'minor', description: text }),
-    })
-    if (!r.ok) { alert(await r.text()); return }
-    setIssue('')
-    await reloadActiveReport(rep.id)
+
+    try {
+      setBusy(true)
+
+      // If you added the combined endpoint, try it first
+      if (issueFiles && issueFiles.length > 0) {
+        const fd = new FormData()
+        // required fields for combined endpoint
+        fd.append('component', 'general')
+        fd.append('severity', 'minor')
+        if (text) fd.append('description', text)
+        Array.from(issueFiles).forEach(f => fd.append('files', f))
+
+        const tryCombined = await fetch(`${API}/reports/${rep.id}/defects-with-photos`, {
+          method: 'POST',
+          headers: authHeaders(), // auth only; browser sets multipart boundary
+          body: fd,
+        })
+
+        if (tryCombined.ok) {
+          // success in one call
+          setIssue('')
+          setIssueFiles(null)
+          if (fileRef.current) fileRef.current.value = ''
+          await reloadActiveReport(rep.id)
+          setBusy(false)
+          return
+        }
+        // If 404/405 etc, fall through to two-step flow
+      }
+
+      // Two-step fallback (always works with your existing backend)
+      // 1) create defect
+      const r1 = await fetch(`${API}/reports/${rep.id}/defects`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ component: 'general', severity: 'minor', description: text }),
+      })
+      if (!r1.ok) throw new Error(await r1.text())
+      const defect = await r1.json()
+
+      // 2) upload photos if any
+      if (issueFiles && issueFiles.length > 0) {
+        await uploadDefectPhotos(defect.id, issueFiles)
+      }
+
+      setIssue('')
+      setIssueFiles(null)
+      if (fileRef.current) fileRef.current.value = ''
+      await reloadActiveReport(rep.id)
+    } catch (err: any) {
+      alert(err?.message || 'Failed to add issue')
+    } finally {
+      setBusy(false)
+    }
   }
 
   // Edit / toggle / delete defect
@@ -207,7 +279,7 @@ function DriverTrucksInner() {
         </div>
 
         {/* Right: actions */}
-        <div className="p-4 md:col-span-2 space-y-4">
+        <div className="p-4 md:grid md:col-span-2 space-y-4">
           {!selected ? (
             <div className="text-sm text-gray-500">Choose a truck on the left.</div>
           ) : (
@@ -228,15 +300,26 @@ function DriverTrucksInner() {
                 </button>
               </div>
 
-              {/* Add issue */}
-              <div className="grid sm:grid-cols-5 gap-2">
+              {/* Add issue + photos */}
+              <div className="grid sm:grid-cols-6 gap-2 items-center">
                 <input
-                  className="border p-2 rounded-xl sm:col-span-4"
+                  className="border p-2 rounded-xl sm:col-span-3"
                   placeholder="Add an issue (e.g., brake light out)"
                   value={issue}
                   onChange={(e) => setIssue(e.target.value)}
                 />
-                <button className="border rounded-xl p-2" onClick={addIssue}>Add issue</button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="border p-2 rounded-xl sm:col-span-2"
+                  onChange={(e) => setIssueFiles(e.currentTarget.files)}
+                  aria-label="Attach photos"
+                />
+                <button className="border rounded-xl p-2" onClick={addIssue} disabled={busy}>
+                  {busy ? 'Adding…' : 'Add issue'}
+                </button>
               </div>
 
               {/* Active report & issues */}
@@ -257,18 +340,35 @@ function DriverTrucksInner() {
                     ) : (
                       <div className="divide-y">
                         {defects.map(d => (
-                          <div key={d.id} className="p-3 text-sm flex items-center gap-3">
-                            <div className="flex-1">
-                              <div className="font-medium">{d.description || '(no description)'}</div>
-                              <div className="text-xs text-gray-600">{d.resolved ? 'Resolved' : 'Open'}</div>
+                          <div key={d.id} className="p-3 text-sm space-y-2">
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1">
+                                <div className="font-medium">{d.description || '(no description)'}</div>
+                                <div className="text-xs text-gray-600">{d.resolved ? 'Resolved' : 'Open'}</div>
+                              </div>
+                              <button className="text-xs underline" onClick={() => editDefect(d)}>Edit</button>
+                              <button className="text-xs underline" onClick={() => toggleResolved(d)}>
+                                {d.resolved ? 'Reopen' : 'Resolve'}
+                              </button>
+                              <button className="text-xs underline text-red-600" onClick={() => deleteDefect(d.id)}>
+                                Delete
+                              </button>
                             </div>
-                            <button className="text-xs underline" onClick={() => editDefect(d)}>Edit</button>
-                            <button className="text-xs underline" onClick={() => toggleResolved(d)}>
-                              {d.resolved ? 'Reopen' : 'Resolve'}
-                            </button>
-                            <button className="text-xs underline text-red-600" onClick={() => deleteDefect(d.id)}>
-                              Delete
-                            </button>
+
+                            {/* Thumbnails if backend returns photos on defects */}
+                            {d.photos && d.photos.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {d.photos.map(p => (
+                                  <a key={p.id} href={p.path} target="_blank" rel="noreferrer" className="inline-block">
+                                    <img
+                                      src={p.path}
+                                      alt={p.caption || 'defect photo'}
+                                      className="h-16 w-16 object-cover rounded-md border"
+                                    />
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         ))}
                       </div>
