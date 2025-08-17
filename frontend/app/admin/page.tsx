@@ -10,7 +10,7 @@ type UserRow = {
   id: number
   name: string
   email: string
-  role: string // ← was a union; allow custom roles from backend
+  role: string
 }
 
 type RoleOut = { id: number; name: string; permissions: string[] }
@@ -31,13 +31,23 @@ function AdminInner() {
   const [busy, setBusy] = useState(false)
   const [pmAlertCount, setPmAlertCount] = useState<number>(0)
 
-  // ⬇️ NEW: roles from backend
+  // Roles from backend (excluding 'admin'; we append admin manually)
   const [roles, setRoles] = useState<string[]>([])
+
+  // Row editing state + drafts
+  const [editing, setEditing] = useState<Record<number, boolean>>({})
+  const [draft, setDraft] = useState<Record<number, UserRow>>({})
 
   async function loadUsers() {
     const r = await fetch(`${API}/users`, { headers: authHeaders() })
     if (!r.ok) { alert(await r.text().catch(()=> 'Failed to load users')); return }
-    setUsers(await r.json())
+    const data: UserRow[] = await r.json()
+    setUsers(data)
+    // reset edit state on fresh load
+    const e: Record<number, boolean> = {}
+    const d: Record<number, UserRow> = {}
+    data.forEach(u => { e[u.id] = false; d[u.id] = { ...u } })
+    setEditing(e); setDraft(d)
   }
 
   async function loadRoles() {
@@ -45,7 +55,6 @@ function AdminInner() {
       const r = await fetch(`${API}/roles`, { headers: authHeaders() })
       if (!r.ok) { setRoles([]); return }
       const data: RoleOut[] = await r.json()
-      // exclude 'admin' from dynamic list; we'll append it manually so it's always present
       const names = data.map(x => x.name).filter(n => n !== 'admin')
       setRoles(names)
     } catch {
@@ -54,7 +63,6 @@ function AdminInner() {
   }
 
   async function loadPmAlertCount() {
-    // falls back to /alerts/pm if /alerts/pm-with-appts is unavailable
     const tryUrls = [`${API}/alerts/pm-with-appts`, `${API}/alerts/pm`]
     for (const url of tryUrls) {
       const r = await fetch(url, { headers: authHeaders() })
@@ -69,7 +77,7 @@ function AdminInner() {
 
   useEffect(() => {
     loadUsers()
-    loadRoles()          // ⬅️ NEW
+    loadRoles()
     loadPmAlertCount()
   }, [])
 
@@ -101,7 +109,37 @@ function AdminInner() {
       body: JSON.stringify(patch),
     })
     if (!r.ok) { alert(await r.text()); return }
-    loadUsers()
+  }
+
+  async function saveRow(u: UserRow) {
+    const d = draft[u.id]
+    if (!d) return
+    setBusy(true)
+    try {
+      // compute minimal patch
+      const patch: Partial<UserRow> = {}
+      if (d.name !== u.name) patch.name = d.name
+      if (d.email !== u.email) patch.email = d.email
+      if (d.role !== u.role) patch.role = d.role
+      if (Object.keys(patch).length > 0) {
+        await patchUser(u, patch)
+      }
+      // refresh and exit edit mode
+      await loadUsers()
+      setEditing(prev => ({ ...prev, [u.id]: false }))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function startEdit(u: UserRow) {
+    setEditing(prev => ({ ...prev, [u.id]: true }))
+    setDraft(prev => ({ ...prev, [u.id]: { ...u } }))
+  }
+
+  function cancelEdit(u: UserRow) {
+    setDraft(prev => ({ ...prev, [u.id]: { ...u } })) // revert to server values
+    setEditing(prev => ({ ...prev, [u.id]: false }))
   }
 
   async function resetPassword(u: UserRow) {
@@ -118,7 +156,6 @@ function AdminInner() {
     loadUsers()
   }
 
-  // helpful derived list: dynamic roles (no admin) + guaranteed 'admin' at end
   const roleOptions = [...roles, 'admin']
 
   return (
@@ -149,7 +186,7 @@ function AdminInner() {
           )}
         </Link>
 
-        {/* ⬇️ CHANGED: link Users card to the users page */}
+        {/* Users card points to the full Users page */}
         <Link href="/users" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Users</div>
           <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
@@ -163,11 +200,9 @@ function AdminInner() {
           <input name="name" placeholder="Name" className="border p-2 rounded-xl" required />
           <input name="email" placeholder="Email" className="border p-2 rounded-xl" required />
           <select name="role" className="border p-2 rounded-xl">
-            {/* dynamic roles first (without admin) */}
             {roles.map(r => (
               <option key={r} value={r}>{r}</option>
             ))}
-            {/* always keep admin */}
             <option value="admin">admin</option>
           </select>
           <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl" />
@@ -175,7 +210,7 @@ function AdminInner() {
         </form>
       </section>
 
-      {/* Users Table */}
+      {/* Users Table (locked until Edit) */}
       <section className="border rounded-2xl p-4">
         <div className="font-semibold mb-2">Users</div>
         <div className="overflow-auto">
@@ -189,43 +224,59 @@ function AdminInner() {
               </tr>
             </thead>
             <tbody>
-              {users.map(u => (
-                <tr key={u.id} className="border-t">
-                  <td className="p-2">
-                    <input
-                      defaultValue={u.name}
-                      className="border p-1 rounded"
-                      onBlur={(e)=>patchUser(u,{ name: e.target.value })}
-                    />
-                  </td>
-                  <td className="p-2">
-                    <input
-                      defaultValue={u.email}
-                      className="border p-1 rounded"
-                      onBlur={(e)=>patchUser(u,{ email: e.target.value })}
-                    />
-                  </td>
-                  <td className="p-2">
-                    <select
-                      defaultValue={u.role}
-                      className="border p-1 rounded"
-                      onChange={(e)=>patchUser(u,{ role: e.target.value })}
-                    >
-                      {/* ensure current role is selectable even if it's not in roles */}
-                      {!roleOptions.includes(u.role) && (
-                        <option value={u.role}>{u.role}</option>
+              {users.map(u => {
+                const isEditing = !!editing[u.id]
+                const d = draft[u.id] ?? u
+                return (
+                  <tr key={u.id} className="border-t">
+                    <td className="p-2">
+                      <input
+                        value={isEditing ? d.name : u.name}
+                        readOnly={!isEditing}
+                        onChange={(e)=> setDraft(prev => ({ ...prev, [u.id]: { ...(prev[u.id] ?? u), name: e.target.value } }))}
+                        className={`border p-1 rounded w-full ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      />
+                    </td>
+                    <td className="p-2">
+                      <input
+                        value={isEditing ? d.email : u.email}
+                        readOnly={!isEditing}
+                        onChange={(e)=> setDraft(prev => ({ ...prev, [u.id]: { ...(prev[u.id] ?? u), email: e.target.value } }))}
+                        className={`border p-1 rounded w-full ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      />
+                    </td>
+                    <td className="p-2">
+                      <select
+                        value={isEditing ? d.role : u.role}
+                        disabled={!isEditing}
+                        onChange={(e)=> setDraft(prev => ({ ...prev, [u.id]: { ...(prev[u.id] ?? u), role: e.target.value } }))}
+                        className={`border p-1 rounded ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      >
+                        {!roleOptions.includes(u.role) && <option value={u.role}>{u.role}</option>}
+                        {roleOptions.map(r => (
+                          <option key={r} value={r}>{r}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-2 space-x-2">
+                      {!isEditing ? (
+                        <>
+                          <button className="underline text-sm" onClick={()=>startEdit(u)}>Edit</button>
+                          <button className="underline text-sm" onClick={()=>resetPassword(u)}>Reset password</button>
+                          <button className="underline text-sm text-red-600" onClick={()=>removeUser(u)}>Delete</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="underline text-sm" onClick={()=>cancelEdit(u)} disabled={busy}>Cancel</button>
+                          <button className="underline text-sm text-green-700" onClick={()=>saveRow(u)} disabled={busy}>
+                            {busy ? 'Saving…' : 'Save'}
+                          </button>
+                        </>
                       )}
-                      {roleOptions.map(r => (
-                        <option key={r} value={r}>{r}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="p-2 space-x-2">
-                    <button className="underline text-sm" onClick={()=>resetPassword(u)}>Reset password</button>
-                    <button className="underline text-sm text-red-600" onClick={()=>removeUser(u)}>Delete</button>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                  </tr>
+                )
+              })}
               {users.length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-2 text-sm text-gray-500">No users yet.</td>
