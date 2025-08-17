@@ -143,6 +143,18 @@ class ServiceRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     truck = relationship("Truck", back_populates="services")
 
+# ----------------- NEW: PM Appointment model -----------------
+class PMAppointment(Base):
+    __tablename__ = "pm_appointments"
+    id = Column(Integer, primary_key=True)
+    truck_id = Column(Integer, ForeignKey("trucks.id"), nullable=False)
+    service_type = Column(String, nullable=False)  # 'oil' | 'chassis'
+    shop = Column(String, nullable=False)
+    scheduled_date = Column(DateTime, nullable=False)
+    status = Column(String, default="scheduled")   # 'scheduled' | 'completed' | 'cancelled'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    truck = relationship("Truck")
+
 Base.metadata.create_all(bind=engine)
 
 # ----------------- Auth helpers -----------------
@@ -333,6 +345,29 @@ class ServiceOut(BaseModel):
     class Config:
         from_attributes = True
 
+# ----------------- NEW: PM Appointment schemas -----------------
+class PMAppointmentIn(BaseModel):
+    truck_id: int
+    service_type: str  # 'oil' | 'chassis'
+    shop: str
+    scheduled_date: datetime
+
+class PMAppointmentPatch(BaseModel):
+    shop: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
+    status: Optional[str] = None  # 'scheduled' | 'completed' | 'cancelled'
+
+class PMAppointmentOut(BaseModel):
+    id: int
+    truck_id: int
+    service_type: str
+    shop: str
+    scheduled_date: datetime
+    status: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
 # ----------------- Routes -----------------
 @app.post("/auth/login", response_model=LoginOut)
 def login(payload: LoginIn, db: Session = Depends(get_db)):
@@ -379,6 +414,59 @@ def pm_alerts(
         r.chassis_miles_remaining if r.chassis_due_soon else 10**9
     ))
     return results
+
+# ----------------- NEW: Alerts with appointments (non-breaking; extra endpoint) -----------------
+@app.get("/alerts/pm-with-appts")
+def pm_alerts_with_appts(
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    out = []
+    trucks = db.query(Truck).filter(Truck.active == True).all()
+    for t in trucks:
+        s = pm_status_for(t, db)
+        oil_soon = s["oil_miles_remaining"] <= PM_OIL_SOON_MILES
+        ch_soon = s["chassis_miles_remaining"] <= PM_CHASSIS_SOON_MILES
+        if not (oil_soon or ch_soon):
+            continue
+
+        appt_oil = db.query(PMAppointment).filter(
+            PMAppointment.truck_id == t.id,
+            PMAppointment.service_type == "oil",
+            PMAppointment.status == "scheduled"
+        ).order_by(PMAppointment.scheduled_date.asc()).first()
+
+        appt_ch = db.query(PMAppointment).filter(
+            PMAppointment.truck_id == t.id,
+            PMAppointment.service_type == "chassis",
+            PMAppointment.status == "scheduled"
+        ).order_by(PMAppointment.scheduled_date.asc()).first()
+
+        out.append({
+            "truck_id": t.id,
+            "truck_number": t.number,
+            "odometer": s["odometer"],
+            "oil_next_due": s["oil_next_due"],
+            "oil_miles_remaining": s["oil_miles_remaining"],
+            "chassis_next_due": s["chassis_next_due"],
+            "chassis_miles_remaining": s["chassis_miles_remaining"],
+            "oil_due_soon": oil_soon,
+            "chassis_due_soon": ch_soon,
+            "oil_appt": ({
+                "id": appt_oil.id,
+                "shop": appt_oil.shop,
+                "scheduled_date": appt_oil.scheduled_date.isoformat(),
+                "status": appt_oil.status,
+            } if appt_oil else None),
+            "chassis_appt": ({
+                "id": appt_ch.id,
+                "shop": appt_ch.shop,
+                "scheduled_date": appt_ch.scheduled_date.isoformat(),
+                "status": appt_ch.status,
+            } if appt_ch else None),
+        })
+    return out
 
 # ---- Users admin endpoints (search/pagination/sort + CRUD) ----
 @app.get("/users", response_model=List[UserOut])
@@ -756,6 +844,18 @@ def add_service(truck_id: int, svc: ServiceIn, user: User = Depends(require_user
     if svc.odometer and (truck.odometer is None or svc.odometer > truck.odometer):
         truck.odometer = svc.odometer
     db.commit()
+
+    # ----------------- NEW: mark earliest scheduled appt as completed for this service type -----------------
+    appt = db.query(PMAppointment).filter(
+        PMAppointment.truck_id == truck_id,
+        PMAppointment.service_type == svc.service_type,
+        PMAppointment.status == "scheduled"
+    ).order_by(PMAppointment.scheduled_date.asc()).first()
+    if appt:
+        appt.status = "completed"
+        db.commit()
+    # ---------------------------------------------------------------------------------------
+
     return pm_status_for(truck, db)
 
 @app.get("/trucks/{truck_id}/service", response_model=List[ServiceOut])
@@ -771,6 +871,74 @@ def delete_service(service_id: int, user: User = Depends(require_user), db: Sess
         return
     db.delete(s)
     db.commit()
+
+# ----------------- NEW: PM Appointment CRUD -----------------
+@app.get("/pm/appointments", response_model=List[PMAppointmentOut])
+def list_pm_appointments(
+    truck_id: Optional[int] = None,
+    status: Optional[str] = None,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    q = db.query(PMAppointment)
+    if truck_id is not None:
+        q = q.filter(PMAppointment.truck_id == truck_id)
+    if status:
+        q = q.filter(PMAppointment.status == status)
+    return q.order_by(PMAppointment.scheduled_date.asc()).all()
+
+@app.post("/pm/appointments", response_model=PMAppointmentOut)
+def create_pm_appointment(
+    payload: PMAppointmentIn,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    if payload.service_type not in ("oil", "chassis"):
+        raise HTTPException(400, "service_type must be 'oil' or 'chassis'")
+    appt = PMAppointment(
+        truck_id=payload.truck_id,
+        service_type=payload.service_type,
+        shop=payload.shop,
+        scheduled_date=payload.scheduled_date,
+    )
+    db.add(appt); db.commit(); db.refresh(appt)
+    return appt
+
+@app.patch("/pm/appointments/{appt_id}", response_model=PMAppointmentOut)
+def patch_pm_appointment(
+    appt_id: int,
+    payload: PMAppointmentPatch,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    appt = db.get(PMAppointment, appt_id)
+    if not appt:
+        raise HTTPException(404, "Appointment not found")
+    if payload.shop is not None:
+        appt.shop = payload.shop
+    if payload.scheduled_date is not None:
+        appt.scheduled_date = payload.scheduled_date
+    if payload.status is not None:
+        if payload.status not in ("scheduled", "completed", "cancelled"):
+            raise HTTPException(400, "Invalid status")
+        appt.status = payload.status
+    db.commit(); db.refresh(appt)
+    return appt
+
+@app.delete("/pm/appointments/{appt_id}", status_code=204)
+def delete_pm_appointment(
+    appt_id: int,
+    user: User = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    require_role(user, ["manager", "admin"])
+    appt = db.get(PMAppointment, appt_id)
+    if not appt:
+        return
+    db.delete(appt); db.commit()
 
 # ----------------- Health -----------------
 @app.get("/health")
