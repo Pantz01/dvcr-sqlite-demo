@@ -121,16 +121,33 @@ function AdminTrucksInner() {
           <div className="p-3 font-semibold border-b">Fleet</div>
           <div className="max-h-[60vh] overflow-auto divide-y">
             {trucks.map(t => (
-              <button
+              <div
                 key={t.id}
-                className={`w-full text-left p-3 hover:bg-gray-50 ${selected?.id === t.id ? 'bg-gray-50' : ''}`}
-                onClick={() => selectTruck(t)}
+                className={`p-3 hover:bg-gray-50 ${selected?.id === t.id ? 'bg-gray-50' : ''}`}
               >
-                <div className="font-medium">{t.number}</div>
-                <div className="text-xs text-gray-600">
-                  VIN {t.vin || '—'} · Odo {t.odometer ?? 0} · {t.active ? 'Active' : 'Inactive'}
+                <button
+                  className="w-full text-left"
+                  onClick={() => selectTruck(t)}
+                  aria-label={`Select truck ${t.number}`}
+                >
+                  <div className="font-medium flex items-center gap-2">
+                    <span>{t.number}</span>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    VIN {t.vin || '—'} · Odo {t.odometer ?? 0} · {t.active ? 'Active' : 'Inactive'}
+                  </div>
+                </button>
+
+                {/* Per-row admin link */}
+                <div className="mt-2">
+                  <Link
+                    href={`/admin/trucks/${t.id}`}
+                    className="text-xs underline"
+                  >
+                    View Reports
+                  </Link>
                 </div>
-              </button>
+              </div>
             ))}
             {trucks.length === 0 && (
               <div className="p-3 text-sm text-gray-500">No trucks.</div>
@@ -159,7 +176,7 @@ function AdminTrucksInner() {
                     <input
                       defaultValue={selected.vin ?? ''}
                       className="border p-2 rounded-xl w-full"
-                      onBlur={(e) => saveField(selected, { vin: e.target.value || null as any })}
+                      onBlur={(e) => saveField(selected, { vin: (e.target.value || null) as any })}
                     />
                   </Labeled>
 
@@ -198,10 +215,10 @@ function AdminTrucksInner() {
                   )}
                 </div>
 
-                {/* Manage reports link */}
+                {/* Manage reports link (for the selected truck) */}
                 <div>
                   <Link href={`/admin/trucks/${selected.id}`} className="underline">
-                    Manage Reports
+                    View Reports
                   </Link>
                 </div>
 
