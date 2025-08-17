@@ -44,6 +44,11 @@ export default function AdminTrucksPage() {
 function AdminTrucksInner() {
   const [trucks, setTrucks] = useState<Truck[]>([])
   const [selected, setSelected] = useState<Truck | null>(null)
+
+  // 🔹 NEW: edit/lock + local form copy
+  const [isEditing, setIsEditing] = useState(false)
+  const [form, setForm] = useState<Truck | null>(null)
+
   const [pm, setPm] = useState<PM | null>(null)
   const [services, setServices] = useState<Service[]>([])
   const [busy, setBusy] = useState(false)
@@ -56,8 +61,26 @@ function AdminTrucksInner() {
     setTrucks(await r.json())
   }
 
+  // 🔹 Dirty check used when switching trucks mid-edit
+  const isDirty =
+    !!selected && !!form && (
+      selected.number !== form.number ||
+      (selected.vin ?? '') !== (form.vin ?? '') ||
+      selected.active !== form.active ||
+      Number(selected.odometer ?? 0) !== Number(form.odometer ?? 0)
+    )
+
   async function selectTruck(t: Truck) {
+    // 🔹 Prevent state bleed: confirm if unsaved changes
+    if (isEditing && isDirty) {
+      const ok = confirm('You have unsaved changes. Discard and switch trucks?')
+      if (!ok) return
+    }
+
     setSelected(t)
+    setIsEditing(false)       // lock fields
+    setForm({ ...t })        // fresh local copy for controlled inputs
+
     setPm(null)
     setServices([])
     fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
@@ -66,6 +89,7 @@ function AdminTrucksInner() {
       .then(r => r.ok ? r.json() : []).then(setServices)
   }
 
+  // ⚠️ Kept for compatibility (not used by onBlur anymore)
   async function saveField(t: Truck, patch: Partial<Truck>) {
     const r = await fetch(`${API}/trucks/${t.id}`, {
       method: 'PATCH',
@@ -75,11 +99,48 @@ function AdminTrucksInner() {
     if (!r.ok) { alert(await r.text()); return }
     const updated = await r.json()
     setTrucks(prev => prev.map(x => x.id === t.id ? updated : x))
-    if (selected?.id === t.id) setSelected(updated)
+    if (selected?.id === t.id) {
+      setSelected(updated)
+      setForm({ ...updated }) // keep form in sync
+    }
     if (patch.odometer !== undefined) {
       const p = await fetch(`${API}/trucks/${t.id}/pm-next`, { headers: authHeaders() })
       if (p.ok) setPm(await p.json())
     }
+  }
+
+  // 🔹 NEW: Save all edits at once, then refresh PM/services
+  async function saveEdits() {
+    if (!form) return
+    setBusy(true)
+    const r = await fetch(`${API}/trucks/${form.id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        number: form.number,
+        vin: form.vin ?? null,
+        active: !!form.active,
+        odometer: Number(form.odometer ?? 0),
+      }),
+    })
+    setBusy(false)
+    if (!r.ok) { alert(await r.text()); return }
+    const updated: Truck = await r.json()
+    setTrucks(prev => prev.map(x => x.id === updated.id ? updated : x))
+    setSelected(updated)
+    setForm({ ...updated })
+    setIsEditing(false)
+
+    // refresh PM + services snapshot
+    const p = await fetch(`${API}/trucks/${updated.id}/pm-next`, { headers: authHeaders() })
+    if (p.ok) setPm(await p.json())
+    const s = await fetch(`${API}/trucks/${updated.id}/service`, { headers: authHeaders() })
+    if (s.ok) setServices(await s.json())
+  }
+
+  function cancelEdits() {
+    if (selected) setForm({ ...selected })
+    setIsEditing(false)
   }
 
   async function addService(truck: Truck, service_type: 'oil' | 'chassis', odometer: number, notes: string) {
@@ -107,7 +168,7 @@ function AdminTrucksInner() {
     if (!confirm(`Delete truck ${t.number}? This will remove its reports/defects/photos/services.`)) return
     const r = await fetch(`${API}/trucks/${t.id}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok && r.status !== 204) { alert(await r.text()); return }
-    setSelected(null); setPm(null); setServices([])
+    setSelected(null); setPm(null); setServices([]); setForm(null); setIsEditing(false)
     loadTrucks()
   }
 
@@ -158,7 +219,39 @@ function AdminTrucksInner() {
         {/* Right: details & actions */}
         <div className="md:col-span-2 space-y-4">
           <div className="border rounded-2xl">
-            <div className="p-3 font-semibold border-b">Details</div>
+            <div className="p-3 font-semibold border-b flex items-center justify-between">
+              <span>Details</span>
+              {selected && (
+                <div className="flex gap-2">
+                  {!isEditing ? (
+                    <button
+                      className="px-3 py-1.5 border rounded-xl"
+                      onClick={() => setIsEditing(true)}
+                    >
+                      Edit
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        className="px-3 py-1.5 border rounded-xl"
+                        onClick={cancelEdits}
+                        disabled={busy}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="px-3 py-1.5 border rounded-xl bg-black text-white disabled:opacity-50"
+                        onClick={saveEdits}
+                        disabled={busy}
+                      >
+                        {busy ? 'Saving…' : 'Save'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             {!selected ? (
               <div className="p-4 text-sm text-gray-500">Select a truck on the left.</div>
             ) : (
@@ -166,34 +259,38 @@ function AdminTrucksInner() {
                 <div className="grid sm:grid-cols-2 gap-3">
                   <Labeled label="Truck Number">
                     <input
-                      defaultValue={selected.number}
-                      className="border p-2 rounded-xl w-full"
-                      onBlur={(e) => saveField(selected, { number: e.target.value })}
+                      value={form?.number ?? ''}
+                      readOnly={!isEditing}
+                      onChange={(e) => setForm(f => f ? { ...f, number: e.target.value } : f)}
+                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
                     />
                   </Labeled>
 
                   <Labeled label="VIN">
                     <input
-                      defaultValue={selected.vin ?? ''}
-                      className="border p-2 rounded-xl w-full"
-                      onBlur={(e) => saveField(selected, { vin: (e.target.value || null) as any })}
+                      value={form?.vin ?? ''}
+                      readOnly={!isEditing}
+                      onChange={(e) => setForm(f => f ? { ...f, vin: (e.target.value || null) as any } : f)}
+                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
                     />
                   </Labeled>
 
                   <Labeled label="Odometer">
                     <input
                       type="number"
-                      defaultValue={selected.odometer ?? 0}
-                      className="border p-2 rounded-xl w-full"
-                      onBlur={(e) => saveField(selected, { odometer: parseInt(e.target.value || '0', 10) })}
+                      value={form?.odometer ?? 0}
+                      readOnly={!isEditing}
+                      onChange={(e) => setForm(f => f ? { ...f, odometer: parseInt(e.target.value || '0', 10) } : f)}
+                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
                     />
                   </Labeled>
 
                   <Labeled label="Active">
                     <select
-                      defaultValue={selected.active ? '1' : '0'}
-                      className="border p-2 rounded-xl w-full"
-                      onChange={(e) => saveField(selected, { active: e.target.value === '1' })}
+                      value={form?.active ? '1' : '0'}
+                      disabled={!isEditing}
+                      onChange={(e) => setForm(f => f ? { ...f, active: e.target.value === '1' } : f)}
+                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
                     >
                       <option value="1">Active</option>
                       <option value="0">Inactive</option>
