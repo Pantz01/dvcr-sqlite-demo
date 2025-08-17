@@ -10,8 +10,10 @@ type UserRow = {
   id: number
   name: string
   email: string
-  role: 'driver' | 'mechanic' | 'manager' | 'admin'
+  role: string // ← was a union; allow custom roles from backend
 }
+
+type RoleOut = { id: number; name: string; permissions: string[] }
 
 export default function AdminPage() {
   return (
@@ -29,10 +31,26 @@ function AdminInner() {
   const [busy, setBusy] = useState(false)
   const [pmAlertCount, setPmAlertCount] = useState<number>(0)
 
+  // ⬇️ NEW: roles from backend
+  const [roles, setRoles] = useState<string[]>([])
+
   async function loadUsers() {
     const r = await fetch(`${API}/users`, { headers: authHeaders() })
     if (!r.ok) { alert(await r.text().catch(()=> 'Failed to load users')); return }
     setUsers(await r.json())
+  }
+
+  async function loadRoles() {
+    try {
+      const r = await fetch(`${API}/roles`, { headers: authHeaders() })
+      if (!r.ok) { setRoles([]); return }
+      const data: RoleOut[] = await r.json()
+      // exclude 'admin' from dynamic list; we'll append it manually so it's always present
+      const names = data.map(x => x.name).filter(n => n !== 'admin')
+      setRoles(names)
+    } catch {
+      setRoles([])
+    }
   }
 
   async function loadPmAlertCount() {
@@ -51,6 +69,7 @@ function AdminInner() {
 
   useEffect(() => {
     loadUsers()
+    loadRoles()          // ⬅️ NEW
     loadPmAlertCount()
   }, [])
 
@@ -99,6 +118,9 @@ function AdminInner() {
     loadUsers()
   }
 
+  // helpful derived list: dynamic roles (no admin) + guaranteed 'admin' at end
+  const roleOptions = [...roles, 'admin']
+
   return (
     <main className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -127,7 +149,8 @@ function AdminInner() {
           )}
         </Link>
 
-        <Link href="/admin" className="p-4 border rounded-2xl hover:bg-gray-50">
+        {/* ⬇️ CHANGED: link Users card to the users page */}
+        <Link href="/users" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Users</div>
           <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
         </Link>
@@ -140,9 +163,11 @@ function AdminInner() {
           <input name="name" placeholder="Name" className="border p-2 rounded-xl" required />
           <input name="email" placeholder="Email" className="border p-2 rounded-xl" required />
           <select name="role" className="border p-2 rounded-xl">
-            <option value="driver">driver</option>
-            <option value="mechanic">mechanic</option>
-            <option value="manager">manager</option>
+            {/* dynamic roles first (without admin) */}
+            {roles.map(r => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+            {/* always keep admin */}
             <option value="admin">admin</option>
           </select>
           <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl" />
@@ -184,9 +209,15 @@ function AdminInner() {
                     <select
                       defaultValue={u.role}
                       className="border p-1 rounded"
-                      onChange={(e)=>patchUser(u,{ role: e.target.value as UserRow['role'] })}
+                      onChange={(e)=>patchUser(u,{ role: e.target.value })}
                     >
-                      {['driver','mechanic','manager','admin'].map(r => <option key={r} value={r}>{r}</option>)}
+                      {/* ensure current role is selectable even if it's not in roles */}
+                      {!roleOptions.includes(u.role) && (
+                        <option value={u.role}>{u.role}</option>
+                      )}
+                      {roleOptions.map(r => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
                     </select>
                   </td>
                   <td className="p-2 space-x-2">
