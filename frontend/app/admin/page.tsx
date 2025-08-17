@@ -27,13 +27,32 @@ function AdminInner() {
   const me = getUser()
   const [users, setUsers] = useState<UserRow[]>([])
   const [busy, setBusy] = useState(false)
+  const [pmAlertCount, setPmAlertCount] = useState<number>(0)
 
   async function loadUsers() {
     const r = await fetch(`${API}/users`, { headers: authHeaders() })
     if (!r.ok) { alert(await r.text().catch(()=> 'Failed to load users')); return }
     setUsers(await r.json())
   }
-  useEffect(() => { loadUsers() }, [])
+
+  async function loadPmAlertCount() {
+    // falls back to /alerts/pm if /alerts/pm-with-appts is unavailable
+    const tryUrls = [`${API}/alerts/pm-with-appts`, `${API}/alerts/pm`]
+    for (const url of tryUrls) {
+      const r = await fetch(url, { headers: authHeaders() })
+      if (r.ok) {
+        const data = await r.json()
+        setPmAlertCount(Array.isArray(data) ? data.length : 0)
+        return
+      }
+    }
+    setPmAlertCount(0)
+  }
+
+  useEffect(() => {
+    loadUsers()
+    loadPmAlertCount()
+  }, [])
 
   async function createUser(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -90,12 +109,24 @@ function AdminInner() {
       <div className="grid md:grid-cols-3 gap-4">
         <Link href="/admin/trucks" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Trucks</div>
-          <div className="text-sm text-gray-600">Manage fleet & reports</div>
+          <div className="text-sm text-gray-600">Manage fleet & PM service</div>
         </Link>
+
         <Link href="/reports" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Reports</div>
           <div className="text-sm text-gray-600">Browse & manage issues</div>
         </Link>
+
+        <Link href="/admin/pm" className="p-4 border rounded-2xl hover:bg-gray-50 relative">
+          <div className="font-semibold">PM Alerts & Scheduling</div>
+          <div className="text-sm text-gray-600">See due-soon trucks and book shop dates</div>
+          {pmAlertCount > 0 && (
+            <span className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white">
+              {pmAlertCount}
+            </span>
+          )}
+        </Link>
+
         <Link href="/admin" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Users</div>
           <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
