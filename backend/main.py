@@ -219,26 +219,11 @@ async def require_user(request: Request, db: Session = Depends(get_db)) -> User:
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 def require_role(user: 'User', roles: List[str]):
+    # ⬇️ Admin is omnipotent everywhere
+    if user.role == "admin":
+        return
     if user.role not in roles:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-
-# ----------------- Seed demo users/trucks -----------------
-with SessionLocal() as db:
-    if db.query(User).count() == 0:
-        db.add_all([
-            User(name="Alice Driver", email="driver@example.com", role="driver",
-                 password_hash=bcrypt.hash("password123")),
-            User(name="Manny Manager", email="manager@example.com", role="manager",
-                 password_hash=bcrypt.hash("password123")),
-            User(name="Mec McWrench", email="mechanic@example.com", role="mechanic",
-                 password_hash=bcrypt.hash("password123")),
-        ])
-        if db.query(Truck).count() == 0:
-            db.add_all([
-                Truck(number="78014", vin="VIN78014", odometer=18000),
-                Truck(number="78988", vin="VIN78988", odometer=9500),
-            ])
-        db.commit()
 
 # ----------------- Schemas -----------------
 class UserOut(BaseModel):
@@ -419,7 +404,7 @@ async def me(user: User = Depends(require_user)):
 # ----------------- NEW: Roles CRUD -----------------
 @app.get("/roles", response_model=List[RoleOut])
 def list_roles(user: User = Depends(require_user), db: Session = Depends(get_db)):
-    require_role(user, ["manager", "admin"])  # allow managers too
+    require_role(user, ["manager", "admin"])  # allow managers too (admins always pass)
     roles = db.query(Role).order_by(Role.name.asc()).all()
     return [RoleOut(id=r.id, name=r.name, permissions=r.permissions) for r in roles]
 
@@ -601,6 +586,14 @@ def users_patch(uid: int, payload: UserPatch, user: User = Depends(require_user)
     if not u:
         raise HTTPException(404, "User not found")
 
+    # ⬇️ Prevent changing the role of any admin account
+    if u.role == "admin" and payload.role is not None and payload.role != "admin":
+        raise HTTPException(400, "Cannot change role of an admin account")
+
+    # ⬇️ Prevent an admin from downgrading their own role
+    if user.id == u.id and payload.role is not None and payload.role != "admin":
+        raise HTTPException(400, "Admins cannot downgrade their own account")
+
     if payload.email and payload.email != u.email:
         if db.query(User).filter(User.email == payload.email).first():
             raise HTTPException(400, "Email already exists")
@@ -623,6 +616,9 @@ def users_delete(uid: int, user: User = Depends(require_user), db: Session = Dep
     u = db.get(User, uid)
     if not u:
         return
+    # ⬇️ Block deleting any admin account and self-deletion
+    if u.role == "admin":
+        raise HTTPException(400, "Cannot delete an admin account")
     if u.id == user.id:
         raise HTTPException(400, "Refusing to delete your own account")
     db.delete(u)
