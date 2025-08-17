@@ -1,4 +1,4 @@
-import os, shutil
+import os, shutil 
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -800,25 +800,38 @@ def delete_photo(
 
 # ----------------- PM endpoints -----------------
 def pm_status_for(truck: Truck, db: Session) -> dict:
-    odom = truck.odometer or 0
+    """
+    Compute PM using STRICT interval-from-last-service logic:
+      next_due = last_service_odometer + INTERVAL
+    If there has never been a service and the truck's current odometer
+    has already surpassed the first interval, round UP from the CURRENT
+    ODO to the next interval multiple so the 'next due' is in the future.
+    """
+    odom = int(truck.odometer or 0)
 
-    last_oil = db.query(ServiceRecord).filter_by(truck_id=truck.id, service_type="oil")\
-        .order_by(ServiceRecord.odometer.desc()).first()
-    last_ch = db.query(ServiceRecord).filter_by(truck_id=truck.id, service_type="chassis")\
-        .order_by(ServiceRecord.odometer.desc()).first()
+    last_oil = db.query(ServiceRecord).filter_by(
+        truck_id=truck.id, service_type="oil"
+    ).order_by(ServiceRecord.odometer.desc()).first()
+    last_ch = db.query(ServiceRecord).filter_by(
+        truck_id=truck.id, service_type="chassis"
+    ).order_by(ServiceRecord.odometer.desc()).first()
 
-    last_oil_mi = last_oil.odometer if last_oil else 0
-    last_ch_mi = last_ch.odometer if last_ch else 0
+    last_oil_mi = int(last_oil.odometer) if last_oil else 0
+    last_ch_mi = int(last_ch.odometer) if last_ch else 0
 
     OIL_INTERVAL = 20000
     CHASSIS_INTERVAL = 10000
 
-    def next_due(last_miles, interval):
-        base = (last_miles // interval + 1) * interval
-        return max(base, interval)
+    # Base = last service + interval
+    oil_next = last_oil_mi + OIL_INTERVAL
+    chassis_next = last_ch_mi + CHASSIS_INTERVAL
 
-    oil_next = next_due(last_oil_mi, OIL_INTERVAL)
-    chassis_next = next_due(last_ch_mi, CHASSIS_INTERVAL)
+    # If no historical service and current odometer already beyond first interval,
+    # anchor to the next future multiple of the interval based on CURRENT odometer
+    if last_oil is None and odom > oil_next:
+        oil_next = ((odom // OIL_INTERVAL) + 1) * OIL_INTERVAL
+    if last_ch is None and odom > chassis_next:
+        chassis_next = ((odom // CHASSIS_INTERVAL) + 1) * CHASSIS_INTERVAL
 
     return {
         "odometer": odom,
