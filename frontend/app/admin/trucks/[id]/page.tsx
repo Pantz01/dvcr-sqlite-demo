@@ -14,7 +14,12 @@ type Truck = {
   odometer: number
 }
 
-type Note = { id: number; text: string; created_at: string; author: { name: string } }
+type Note = {
+  id: number
+  text: string
+  created_at: string
+  author: { name: string }
+}
 
 type Defect = {
   id: number
@@ -22,6 +27,7 @@ type Defect = {
   severity: string
   description?: string | null
   resolved: boolean
+  resolved_at?: string | null   // ← include resolved timestamp
 }
 
 type Report = {
@@ -34,23 +40,17 @@ type Report = {
   notes?: Note[]
 }
 
-type FlatIssue = Defect & {
-  _report_id: number
-  _reported_at: string
-  _report_notes: Note[]
-}
-
-export default function AdminTruckPage() {
+export default function AdminTruckReportsPage() {
   return (
     <RequireAuth>
       <RoleGuard roles={['manager', 'admin']}>
-        <TruckInner />
+        <PageInner />
       </RoleGuard>
     </RequireAuth>
   )
 }
 
-function TruckInner() {
+function PageInner() {
   const params = useParams() as { id: string }
   const truckId = Number(params.id)
 
@@ -59,59 +59,83 @@ function TruckInner() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Issues (flattened across all reports)
-  const [allIssues, setAllIssues] = useState<FlatIssue[]>([])
-  const [expandedNotes, setExpandedNotes] = useState<Record<number, boolean>>({}) // defectId -> open?
+  // add-issue form (still available on this page if you want)
+  const [newIssue, setNewIssue] = useState('')
+  const [busy, setBusy] = useState(false)
 
-  // Pagination
+  // notes visibility per defect id
+  const [openNotes, setOpenNotes] = useState<Record<number, boolean>>({})
+
+  // pagination (25 per page)
   const PAGE_SIZE = 25
-  const [page, setPage] = useState(1)
+  const [activePage, setActivePage] = useState(1)
+  const [previousPage, setPreviousPage] = useState(1)
 
   useEffect(() => {
-    loadTruck()
-    loadReports()
+    loadTruckAndReports()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [truckId])
 
-  async function loadTruck() {
-    setError(null)
-    const r = await fetch(`${API}/trucks/${truckId}`, { headers: authHeaders() })
-    if (!r.ok) { setError(await r.text()); return }
-    setTruck(await r.json())
-  }
-
-  async function loadReports() {
+  async function loadTruckAndReports() {
     setError(null)
     setLoading(true)
-    const r = await fetch(`${API}/trucks/${truckId}/reports?limit=500`, { headers: authHeaders() })
-    setLoading(false)
-    if (!r.ok) { setError(await r.text()); return }
-    const list: Report[] = await r.json()
-    setReports(list)
-    setAllIssues(buildAllIssuesFromReports(list))
-    setPage(1) // reset to first page when reloading
-  }
+    try {
+      const [t, r] = await Promise.all([
+        fetch(`${API}/trucks/${truckId}`, { headers: authHeaders() }),
+        fetch(`${API}/trucks/${truckId}/reports?limit=2000`, { headers: authHeaders() }), // grab a lot; we page on the client
+      ])
+      if (t.ok) setTruck(await t.json())
+      else setTruck(null)
 
-  function buildAllIssuesFromReports(list: Report[]): FlatIssue[] {
-    const out: FlatIssue[] = []
-    for (const rep of list) {
-      const repNotes = rep.notes ?? []
-      for (const d of rep.defects ?? []) {
-        out.push({
-          ...d,
-          _report_id: rep.id,
-          _reported_at: rep.created_at,
-          _report_notes: repNotes,
-        })
-      }
+      if (r.ok) setReports(await r.json())
+      else setReports([])
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load')
+    } finally {
+      setLoading(false)
     }
-    // newest first by reported_at
-    out.sort((a, b) => new Date(b._reported_at).getTime() - new Date(a._reported_at).getTime())
-    return out
   }
 
-  // --- Issue actions ---
-  async function editIssue(d: FlatIssue) {
+  async function reloadReports() {
+    try {
+      const r = await fetch(`${API}/trucks/${truckId}/reports?limit=2000`, { headers: authHeaders() })
+      if (r.ok) setReports(await r.json())
+    } catch {}
+  }
+
+  // Add a new issue to the newest (or a new) report
+  async function addIssue() {
+    const text = newIssue.trim()
+    if (!text) return
+    setBusy(true)
+    try {
+      // Prefer the most recent report; if none exists, create one quickly
+      let target: Report | null = reports[0] || null
+      if (!target) {
+        const cr = await fetch(`${API}/trucks/${truckId}/reports`, {
+          method: 'POST',
+          headers: jsonHeaders(),
+          body: JSON.stringify({ type: 'pre', odometer: truck?.odometer || 0, summary: '' }),
+        })
+        if (!cr.ok) { alert(await cr.text()); return }
+        target = await cr.json()
+        setReports(prev => [target!, ...prev])
+      }
+
+      const r = await fetch(`${API}/reports/${target!.id}/defects`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ component: 'general', severity: 'minor', description: text }),
+      })
+      if (!r.ok) { alert(await r.text()); return }
+      setNewIssue('')
+      await reloadReports()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function editIssue(d: Defect) {
     const next = prompt('Edit issue', d.description || '') ?? ''
     const r = await fetch(`${API}/defects/${d.id}`, {
       method: 'PATCH',
@@ -119,51 +143,67 @@ function TruckInner() {
       body: JSON.stringify({ description: next }),
     })
     if (!r.ok) { alert(await r.text()); return }
-    await loadReports()
+    await reloadReports()
   }
 
-  async function toggleResolved(d: FlatIssue) {
+  async function toggleResolved(d: Defect) {
     const r = await fetch(`${API}/defects/${d.id}`, {
       method: 'PATCH',
       headers: jsonHeaders(),
       body: JSON.stringify({ resolved: !d.resolved }),
     })
     if (!r.ok) { alert(await r.text()); return }
-    await loadReports()
+    await reloadReports()
   }
 
-  async function deleteIssue(d: FlatIssue) {
+  async function deleteIssue(d: Defect) {
     if (!confirm('Delete this issue?')) return
     const r = await fetch(`${API}/defects/${d.id}`, { method: 'DELETE', headers: authHeaders() })
     if (!r.ok && r.status !== 204) { alert(await r.text()); return }
-    await loadReports()
+    await reloadReports()
   }
 
-  // --- Pagination helpers ---
-  const pageCount = Math.max(1, Math.ceil(allIssues.length / PAGE_SIZE))
-  const pagedIssues = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE
-    return allIssues.slice(start, start + PAGE_SIZE)
-  }, [allIssues, page])
+  // Flatten all defects for this truck and attach the report created_at as "_reported_at"
+  type FlatIssue = Defect & { _report_id: number; _reported_at: string }
+  const allIssues: FlatIssue[] = useMemo(() => {
+    const out: FlatIssue[] = []
+    for (const rep of reports) {
+      for (const d of rep.defects || []) {
+        out.push({ ...d, _report_id: rep.id, _reported_at: rep.created_at })
+      }
+    }
+    // newest first by reported date
+    out.sort((a, b) => new Date(b._reported_at).getTime() - new Date(a._reported_at).getTime())
+    return out
+  }, [reports])
 
-  function prevPage() { setPage(p => Math.max(1, p - 1)) }
-  function nextPage() { setPage(p => Math.min(pageCount, p + 1)) }
+  const activeIssues = allIssues.filter(d => !d.resolved)
+  const previousIssues = allIssues.filter(d => d.resolved)
 
-  // --- CSV export (minimal fields only) ---
+  // paginate helpers
+  const activeTotalPages = Math.max(1, Math.ceil(activeIssues.length / PAGE_SIZE))
+  const prevTotalPages = Math.max(1, Math.ceil(previousIssues.length / PAGE_SIZE))
+
+  const activeSlice = activeIssues.slice((activePage - 1) * PAGE_SIZE, activePage * PAGE_SIZE)
+  const previousSlice = previousIssues.slice((previousPage - 1) * PAGE_SIZE, previousPage * PAGE_SIZE)
+
+  // CSV export: Date of Issue, Issue, Date Resolved / Status
   function exportAllIssuesCsv() {
     const rows = allIssues.map(d => {
       const issueDate = new Date(d._reported_at).toISOString()
       const issueText = d.description ?? ''
-      const resolvedDate = d.resolved ? '' : 'Unresolved' // no resolved_at in backend; leave blank if resolved
+      const resolvedCell =
+        d.resolved
+          ? (d.resolved_at ? new Date(d.resolved_at).toISOString() : '')
+          : 'Unresolved'
       return {
         'Date of Issue': issueDate,
         'Issue': issueText,
-        'Date Resolved / Status': resolvedDate,
+        'Date Resolved / Status': resolvedCell,
       }
     })
 
     const headers = ['Date of Issue', 'Issue', 'Date Resolved / Status']
-
     const escapeCell = (v: any) => {
       const s = String(v ?? '')
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
@@ -172,7 +212,7 @@ function TruckInner() {
     const lines: string[] = []
     lines.push(headers.join(','))
     if (rows.length === 0) {
-      lines.push([ '', '', '' ].join(','))
+      lines.push(['', '', ''].join(','))
     } else {
       for (const row of rows) {
         lines.push(headers.map(h => escapeCell((row as any)[h])).join(','))
@@ -189,6 +229,8 @@ function TruckInner() {
     URL.revokeObjectURL(a.href)
   }
 
+  if (loading && !truck) return <main className="p-6">Loading…</main>
+
   return (
     <main className="p-6 space-y-6">
       <h1 className="text-2xl font-bold">
@@ -197,105 +239,180 @@ function TruckInner() {
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
-      {/* Truck details (read-only) */}
-      <div className="border rounded-2xl p-4 text-sm">
-        {truck ? (
-          <div className="grid sm:grid-cols-4 gap-2">
-            <div><span className="text-gray-600">Truck #</span> <b>{truck.number}</b></div>
-            <div><span className="text-gray-600">VIN</span> <b>{truck.vin || '—'}</b></div>
-            <div><span className="text-gray-600">Odometer</span> <b>{truck.odometer ?? 0}</b></div>
-            <div><span className="text-gray-600">Status</span> <b>{truck.active ? 'Active' : 'Inactive'}</b></div>
-          </div>
-        ) : (
-          <div className="text-gray-500">Loading truck…</div>
-        )}
-      </div>
-
-      {/* Controls: export + pagination */}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={exportAllIssuesCsv}
-          className="border px-3 py-1 rounded-xl"
-        >
-          Export Issues (CSV)
-        </button>
-        <div className="ml-auto flex items-center gap-2">
+      {/* Quick add issue */}
+      <section className="border rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="font-semibold">Add Issue</div>
           <button
-            onClick={prevPage}
-            disabled={page <= 1}
-            className="border px-3 py-1 rounded-xl disabled:opacity-50"
+            onClick={exportAllIssuesCsv}
+            className="text-sm border rounded-xl px-3 py-1.5"
+            title="Export all issues for this truck"
           >
-            Prev
-          </button>
-          <div className="text-sm">
-            Page {page} / {pageCount} · {allIssues.length} total
-          </div>
-          <button
-            onClick={nextPage}
-            disabled={page >= pageCount}
-            className="border px-3 py-1 rounded-xl disabled:opacity-50"
-          >
-            Next
+            Export CSV
           </button>
         </div>
-      </div>
+        <div className="grid sm:grid-cols-5 gap-2">
+          <input
+            className="border p-2 rounded-xl sm:col-span-4"
+            placeholder="Add an issue (e.g., brake light out)"
+            value={newIssue}
+            onChange={(e) => setNewIssue(e.target.value)}
+          />
+          <button className="border rounded-xl p-2" disabled={busy} onClick={addIssue}>
+            {busy ? 'Adding…' : 'Add'}
+          </button>
+        </div>
+      </section>
 
-      {/* Issues list (active + previous) */}
+      {/* Active Issues */}
       <section className="border rounded-2xl overflow-hidden">
-        <div className="p-3 font-semibold border-b">Issues</div>
-
-        {loading ? (
-          <div className="p-4 text-sm text-gray-500">Loading…</div>
-        ) : allIssues.length === 0 ? (
-          <div className="p-4 text-sm text-gray-500">No issues found for this truck.</div>
+        <div className="p-3 font-semibold border-b flex items-center justify-between">
+          <span>Active Issues</span>
+          <span className="text-xs text-gray-600">
+            Showing {activeSlice.length} of {activeIssues.length}
+          </span>
+        </div>
+        {activeIssues.length === 0 ? (
+          <div className="p-3 text-sm text-gray-500">No active issues.</div>
         ) : (
-          <div className="divide-y">
-            {pagedIssues.map(d => (
-              <div key={d.id} className="p-3 text-sm">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1">
-                    <div className="font-medium">{d.description || '(no description)'}</div>
-                    <div className="text-xs text-gray-600">
-                      {d.resolved ? 'Resolved' : 'Unresolved'} · Reported {new Date(d._reported_at).toLocaleString()}
-                    </div>
-                  </div>
-                  <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
-                  <button className="text-xs underline" onClick={() => toggleResolved(d)}>
-                    {d.resolved ? 'Reopen' : 'Resolve'}
-                  </button>
-                  <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
-                </div>
+          <>
+            <div className="divide-y">
+              {activeSlice.map(d => (
+                <IssueRow
+                  key={`a-${d.id}`}
+                  d={d}
+                  openNotes={openNotes}
+                  setOpenNotes={setOpenNotes}
+                  onEdit={editIssue}
+                  onToggle={toggleResolved}
+                  onDelete={deleteIssue}
+                />
+              ))}
+            </div>
+            <Pager page={activePage} totalPages={activeTotalPages} onPage={setActivePage} />
+          </>
+        )}
+      </section>
 
-                {/* Tidy, collapsible notes (per *report*) */}
-                {!!(d._report_notes?.length) && (
-                  <div className="mt-2">
-                    <button
-                      className="text-xs underline"
-                      onClick={() =>
-                        setExpandedNotes(prev => ({ ...prev, [d.id]: !prev[d.id] }))
-                      }
-                    >
-                      {expandedNotes[d.id] ? 'Hide notes' : `Show notes (${d._report_notes.length})`}
-                    </button>
-                    {expandedNotes[d.id] && (
-                      <ul className="mt-2 space-y-2">
-                        {d._report_notes.map(n => (
-                          <li key={n.id} className="border rounded-md p-2">
-                            <div className="text-[11px] text-gray-600">
-                              {n.author?.name || 'User'} • {new Date(n.created_at).toLocaleString()}
-                            </div>
-                            <div>{n.text}</div>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+      {/* Previous Issues (resolved) */}
+      <section className="border rounded-2xl overflow-hidden">
+        <div className="p-3 font-semibold border-b flex items-center justify-between">
+          <span>Previous Issues</span>
+          <span className="text-xs text-gray-600">
+            Showing {previousSlice.length} of {previousIssues.length}
+          </span>
+        </div>
+        {previousIssues.length === 0 ? (
+          <div className="p-3 text-sm text-gray-500">No previous issues.</div>
+        ) : (
+          <>
+            <div className="divide-y">
+              {previousSlice.map(d => (
+                <IssueRow
+                  key={`p-${d.id}`}
+                  d={d}
+                  openNotes={openNotes}
+                  setOpenNotes={setOpenNotes}
+                  onEdit={editIssue}
+                  onToggle={toggleResolved}
+                  onDelete={deleteIssue}
+                />
+              ))}
+            </div>
+            <Pager page={previousPage} totalPages={prevTotalPages} onPage={setPreviousPage} />
+          </>
         )}
       </section>
     </main>
+  )
+}
+
+function IssueRow({
+  d,
+  openNotes,
+  setOpenNotes,
+  onEdit,
+  onToggle,
+  onDelete,
+}: {
+  d: any
+  openNotes: Record<number, boolean>
+  setOpenNotes: React.Dispatch<React.SetStateAction<Record<number, boolean>>>
+  onEdit: (d: any) => void
+  onToggle: (d: any) => void
+  onDelete: (d: any) => void
+}) {
+  const reported = new Date(d._reported_at)
+  const resolvedLabel = d.resolved
+    ? (d.resolved_at ? new Date(d.resolved_at).toLocaleString() : 'Resolved')
+    : 'Unresolved'
+
+  const notes = (d as any)._notes as Note[] | undefined
+
+  return (
+    <div className="p-3 text-sm flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <div className="font-medium">{d.description || '(no description)'}</div>
+          <div className="text-xs text-gray-600">
+            Reported: {reported.toLocaleString()} • Status: {resolvedLabel}
+          </div>
+        </div>
+        <button className="text-xs underline" onClick={() => onEdit(d)}>Edit</button>
+        <button className="text-xs underline" onClick={() => onToggle(d)}>
+          {d.resolved ? 'Reopen' : 'Resolve'}
+        </button>
+        <button className="text-xs underline text-red-600" onClick={() => onDelete(d)}>Delete</button>
+      </div>
+
+      {/* Notes toggle (tidy/hidden by default) */}
+      {notes && notes.length > 0 && (
+        <div>
+          <button
+            className="text-xs underline"
+            onClick={() =>
+              setOpenNotes(prev => ({ ...prev, [d.id]: !prev[d.id] }))
+            }
+          >
+            {openNotes[d.id] ? 'Hide notes' : `Show notes (${notes.length})`}
+          </button>
+          {openNotes[d.id] && (
+            <ul className="mt-2 space-y-2">
+              {notes.map(n => (
+                <li key={n.id} className="border rounded-lg p-2">
+                  <div className="text-xs text-gray-600">
+                    {n.author?.name || 'Someone'} • {new Date(n.created_at).toLocaleString()}
+                  </div>
+                  <div>{n.text}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Pager({ page, totalPages, onPage }: { page: number; totalPages: number; onPage: (p:number)=>void }) {
+  if (totalPages <= 1) return null
+  return (
+    <div className="flex items-center justify-between p-3 text-sm">
+      <button
+        className="border rounded-xl px-3 py-1"
+        onClick={() => onPage(Math.max(1, page - 1))}
+        disabled={page <= 1}
+      >
+        Prev
+      </button>
+      <div>Page {page} of {totalPages}</div>
+      <button
+        className="border rounded-xl px-3 py-1"
+        onClick={() => onPage(Math.min(totalPages, page + 1))}
+        disabled={page >= totalPages}
+      >
+        Next
+      </button>
+    </div>
   )
 }
