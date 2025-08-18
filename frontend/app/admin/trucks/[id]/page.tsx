@@ -27,9 +27,7 @@ type Defect = {
   severity: string
   description?: string | null
   resolved: boolean
-  // present from backend:
   resolved_at?: string | null
-  // we’ll attach these client-side:
   _reported_at: string
   _report_id: number
 }
@@ -63,30 +61,28 @@ function TruckInner() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // pagination (25/page) — separate for active vs previous
+  // pagination (25/page)
   const [activePage, setActivePage] = useState(1)
   const [prevPage, setPrevPage] = useState(1)
   const PAGE_SIZE = 25
 
-  // notes toggle
-  const [showNotes, setShowNotes] = useState(false)
+  // per-issue notes UI
+  const [openNotes, setOpenNotes] = useState<Record<number, boolean>>({})
+  const [newNoteText, setNewNoteText] = useState<Record<number, string>>({}) // keyed by defect.id
 
   useEffect(() => {
     setError(null)
     setLoading(true)
     ;(async () => {
       try {
-        // truck
         const t = await fetch(`${API}/trucks/${truckId}`, { headers: authHeaders() })
         if (!t.ok) throw new Error(await t.text())
         setTruck(await t.json())
 
-        // reports (list)
         const r = await fetch(`${API}/trucks/${truckId}/reports?limit=2000`, { headers: authHeaders() })
         if (!r.ok) throw new Error(await r.text())
         const list: Report[] = await r.json()
 
-        // load full reports (to grab defects+notes)
         const full = await Promise.all(
           list.map(async (rp) => {
             const rr = await fetch(`${API}/reports/${rp.id}`, { headers: authHeaders() })
@@ -94,7 +90,6 @@ function TruckInner() {
             return await rr.json()
           })
         )
-
         setReports(full)
       } catch (e: any) {
         setError(e?.message || 'Failed to load truck data')
@@ -104,35 +99,22 @@ function TruckInner() {
     })()
   }, [truckId])
 
-  // Flatten all defects across all reports, and stamp report meta
+  // Flatten defects and stamp report meta
   const allIssues: Defect[] = useMemo(() => {
     const rows: Defect[] = []
     for (const r of reports) {
       const ds = r.defects || []
       for (const d of ds) {
-        rows.push({
-          ...d,
-          _reported_at: r.created_at,
-          _report_id: r.id,
-        })
+        rows.push({ ...d, _reported_at: r.created_at, _report_id: r.id })
       }
     }
-    // newest first
     rows.sort((a, b) => new Date(b._reported_at).getTime() - new Date(a._reported_at).getTime())
     return rows
   }, [reports])
 
-  const activeIssues = useMemo(
-    () => allIssues.filter(d => !d.resolved),
-    [allIssues]
-  )
+  const activeIssues = useMemo(() => allIssues.filter(d => !d.resolved), [allIssues])
+  const previousIssues = useMemo(() => allIssues.filter(d => d.resolved), [allIssues])
 
-  const previousIssues = useMemo(
-    () => allIssues.filter(d => d.resolved),
-    [allIssues]
-  )
-
-  // paginated slices
   const activeTotalPages = Math.max(1, Math.ceil(activeIssues.length / PAGE_SIZE))
   const prevTotalPages   = Math.max(1, Math.ceil(previousIssues.length / PAGE_SIZE))
 
@@ -146,19 +128,15 @@ function TruckInner() {
     return previousIssues.slice(start, start + PAGE_SIZE)
   }, [previousIssues, prevPage])
 
-  // Aggregate notes (all reports), newest first
-  const allNotes: Note[] = useMemo(() => {
-    const ns: Note[] = []
+  const notesByReport = useMemo(() => {
+    const map = new Map<number, Note[]>()
     for (const r of reports) {
-      if (Array.isArray(r.notes)) ns.push(...r.notes)
+      map.set(r.id, r.notes || [])
     }
-    ns.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    return ns
+    return map
   }, [reports])
 
-  // Mutations
   async function reloadAfterChange() {
-    // re-fetch the full set, same as initial, to keep logic simple
     try {
       const r = await fetch(`${API}/trucks/${truckId}/reports?limit=2000`, { headers: authHeaders() })
       if (!r.ok) return
@@ -202,7 +180,21 @@ function TruckInner() {
     await reloadAfterChange()
   }
 
-  // Export CSV of ALL issues (Date of Issue, Issue, Date Resolved / Status)
+  // Add a note (posts to the report that this issue belongs to)
+  async function addNoteForIssue(defectId: number, reportId: number) {
+    const text = (newNoteText[defectId] || '').trim()
+    if (!text) return
+    const r = await fetch(`${API}/reports/${reportId}/notes`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ text }),
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    setNewNoteText(prev => ({ ...prev, [defectId]: '' }))
+    await reloadAfterChange()
+  }
+
+  // Export CSV (Date of Issue, Issue, Date Resolved / Status)
   function exportAllIssuesCsv() {
     const rows = allIssues.map(d => {
       const issueDate = new Date(d._reported_at).toISOString()
@@ -210,7 +202,7 @@ function TruckInner() {
       const resolvedDate = d.resolved
         ? (d as any).resolved_at
           ? new Date((d as any).resolved_at as string).toISOString()
-          : '' // resolved but no timestamp recorded
+          : ''
         : 'Unresolved'
       return {
         'Date of Issue': issueDate,
@@ -218,7 +210,6 @@ function TruckInner() {
         'Date Resolved / Status': resolvedDate,
       }
     })
-
     const headers = ['Date of Issue', 'Issue', 'Date Resolved / Status']
     const escapeCell = (v: any) => {
       const s = String(v ?? '')
@@ -226,13 +217,8 @@ function TruckInner() {
     }
     const lines: string[] = []
     lines.push(headers.join(','))
-    if (rows.length === 0) {
-      lines.push([ '', '', '' ].join(','))
-    } else {
-      for (const row of rows) {
-        lines.push(headers.map(h => escapeCell((row as any)[h])).join(','))
-      }
-    }
+    if (rows.length === 0) lines.push([ '', '', '' ].join(','))
+    else for (const row of rows) lines.push(headers.map(h => escapeCell((row as any)[h])).join(','))
     const csv = lines.join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a')
@@ -247,13 +233,11 @@ function TruckInner() {
 
   return (
     <main className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold">
-        {truck ? `Truck ${truck.number}` : 'Truck'}
-      </h1>
+      <h1 className="text-2xl font-bold">{truck ? `Truck ${truck.number}` : 'Truck'}</h1>
 
       {error && <div className="text-sm text-red-600">{error}</div>}
 
-      {/* Truck summary row */}
+      {/* Truck summary */}
       <div className="border rounded-2xl p-4 text-sm">
         {truck ? (
           <div className="grid sm:grid-cols-4 gap-2">
@@ -267,15 +251,14 @@ function TruckInner() {
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center justify-between">
-        <div className="font-semibold">Issues (All)</div>
+      {/* Top action: Export */}
+      <div className="flex items-center justify-end">
         <button onClick={exportAllIssuesCsv} className="border rounded-xl px-3 py-1.5">
           Export CSV
         </button>
       </div>
 
-      {/* ACTIVE ISSUES */}
+      {/* ACTIVE ISSUES (with per-issue notes toggle + add note) */}
       <section className="border rounded-2xl overflow-hidden">
         <div className="p-3 font-semibold border-b flex items-center justify-between">
           <span>Active Issues</span>
@@ -287,19 +270,68 @@ function TruckInner() {
         ) : (
           <>
             <div className="divide-y">
-              {activeSlice.map(d => (
-                <div key={d.id} className="p-3 flex items-center gap-3 text-sm">
-                  <div className="flex-1">
-                    <div className="font-medium">{d.description || '(no description)'}</div>
-                    <div className="text-xs text-gray-600">
-                      Reported {new Date(d._reported_at).toLocaleString()}
+              {activeSlice.map(d => {
+                const notes = notesByReport.get(d._report_id) || []
+                const isOpen = !!openNotes[d.id]
+                return (
+                  <div key={d.id} className="p-3 text-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">{d.description || '(no description)'}</div>
+                        <div className="text-xs text-gray-600">
+                          Reported {new Date(d._reported_at).toLocaleString()}
+                        </div>
+                      </div>
+                      <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
+                      <button className="text-xs underline" onClick={() => toggleResolved(d)}>Resolve</button>
+                      <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
+                    </div>
+
+                    {/* Notes toggle + list + add note */}
+                    <div className="mt-2">
+                      <button
+                        className="text-xs underline"
+                        onClick={() => setOpenNotes(prev => ({ ...prev, [d.id]: !prev[d.id] }))}
+                      >
+                        {isOpen ? 'Hide notes' : `Show notes (${notes.length})`}
+                      </button>
+
+                      {isOpen && (
+                        <div className="mt-2 rounded-lg border">
+                          {notes.length === 0 ? (
+                            <div className="p-3 text-xs text-gray-500">No notes for this issue’s report.</div>
+                          ) : (
+                            notes.map(n => (
+                              <div key={n.id} className="p-3 border-t first:border-t-0">
+                                <div className="text-[11px] text-gray-600">
+                                  {n.author?.name || 'Unknown'} • {new Date(n.created_at).toLocaleString()}
+                                </div>
+                                <div className="text-sm">{n.text}</div>
+                              </div>
+                            ))
+                          )}
+
+                          {/* Add note inline */}
+                          <div className="p-3 border-t flex items-center gap-2">
+                            <input
+                              value={newNoteText[d.id] || ''}
+                              onChange={(e) => setNewNoteText(prev => ({ ...prev, [d.id]: e.target.value }))}
+                              placeholder="Add a note"
+                              className="border p-2 rounded-lg flex-1"
+                            />
+                            <button
+                              className="border rounded-lg px-3 py-1.5 text-xs"
+                              onClick={() => addNoteForIssue(d.id, d._report_id)}
+                            >
+                              Add note
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
-                  <button className="text-xs underline" onClick={() => toggleResolved(d)}>Resolve</button>
-                  <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             {/* Active pagination */}
@@ -326,7 +358,7 @@ function TruckInner() {
         )}
       </section>
 
-      {/* PREVIOUS (RESOLVED) ISSUES */}
+      {/* PREVIOUS (RESOLVED) ISSUES (notes + add note) */}
       <section className="border rounded-2xl overflow-hidden">
         <div className="p-3 font-semibold border-b flex items-center justify-between">
           <span>Previous Issues (Resolved)</span>
@@ -338,19 +370,68 @@ function TruckInner() {
         ) : (
           <>
             <div className="divide-y">
-              {previousSlice.map(d => (
-                <div key={d.id} className="p-3 flex items-center gap-3 text-sm">
-                  <div className="flex-1">
-                    <div className="font-medium">{d.description || '(no description)'}</div>
-                    <div className="text-xs text-gray-600">
-                      Reported {new Date(d._reported_at).toLocaleString()} · Resolved {d.resolved_at ? new Date(d.resolved_at).toLocaleString() : '(date not recorded)'}
+              {previousSlice.map(d => {
+                const notes = notesByReport.get(d._report_id) || []
+                const isOpen = !!openNotes[d.id]
+                return (
+                  <div key={d.id} className="p-3 text-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">{d.description || '(no description)'}</div>
+                        <div className="text-xs text-gray-600">
+                          Reported {new Date(d._reported_at).toLocaleString()} · Resolved {d.resolved_at ? new Date(d.resolved_at).toLocaleString() : '(date not recorded)'}
+                        </div>
+                      </div>
+                      <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
+                      <button className="text-xs underline" onClick={() => toggleResolved(d)}>Reopen</button>
+                      <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
+                    </div>
+
+                    {/* Notes toggle + list + add note */}
+                    <div className="mt-2">
+                      <button
+                        className="text-xs underline"
+                        onClick={() => setOpenNotes(prev => ({ ...prev, [d.id]: !prev[d.id] }))}
+                      >
+                        {isOpen ? 'Hide notes' : `Show notes (${notes.length})`}
+                      </button>
+
+                      {isOpen && (
+                        <div className="mt-2 rounded-lg border">
+                          {notes.length === 0 ? (
+                            <div className="p-3 text-xs text-gray-500">No notes for this issue’s report.</div>
+                          ) : (
+                            notes.map(n => (
+                              <div key={n.id} className="p-3 border-t first:border-t-0">
+                                <div className="text-[11px] text-gray-600">
+                                  {n.author?.name || 'Unknown'} • {new Date(n.created_at).toLocaleString()}
+                                </div>
+                                <div className="text-sm">{n.text}</div>
+                              </div>
+                            ))
+                          )}
+
+                          {/* Add note inline */}
+                          <div className="p-3 border-t flex items-center gap-2">
+                            <input
+                              value={newNoteText[d.id] || ''}
+                              onChange={(e) => setNewNoteText(prev => ({ ...prev, [d.id]: e.target.value }))}
+                              placeholder="Add a note"
+                              className="border p-2 rounded-lg flex-1"
+                            />
+                            <button
+                              className="border rounded-lg px-3 py-1.5 text-xs"
+                              onClick={() => addNoteForIssue(d.id, d._report_id)}
+                            >
+                              Add note
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
-                  <button className="text-xs underline" onClick={() => toggleResolved(d)}>Reopen</button>
-                  <button className="text-xs underline text-red-600" onClick={() => deleteIssue(d)}>Delete</button>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             {/* Previous pagination */}
@@ -374,32 +455,6 @@ function TruckInner() {
               </div>
             </div>
           </>
-        )}
-      </section>
-
-      {/* NOTES (hidden by default) */}
-      <section className="border rounded-2xl overflow-hidden">
-        <div className="p-3 font-semibold border-b flex items-center justify-between">
-          <span>Notes</span>
-          <button className="text-xs underline" onClick={() => setShowNotes(s => !s)}>
-            {showNotes ? 'Hide' : 'Show'}
-          </button>
-        </div>
-        {showNotes && (
-          <div className="divide-y">
-            {allNotes.length === 0 ? (
-              <div className="p-4 text-sm text-gray-500">No notes yet.</div>
-            ) : (
-              allNotes.map(n => (
-                <div key={n.id} className="p-3 text-sm">
-                  <div className="text-xs text-gray-600">
-                    {n.author?.name || 'Unknown'} • {new Date(n.created_at).toLocaleString()}
-                  </div>
-                  <div>{n.text}</div>
-                </div>
-              ))
-            )}
-          </div>
         )}
       </section>
     </main>
