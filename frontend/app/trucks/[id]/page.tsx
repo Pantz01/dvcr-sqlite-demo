@@ -191,14 +191,39 @@ export default function TruckDetail() {
       </form>
 
       <div className="space-y-2">
-        {reports.map(r => (
-          <a key={r.id} href={`/reports/${r.id}`} className="block p-3 rounded-xl border hover:bg-gray-50">
-            <div className="text-sm text-gray-600">{new Date(r.created_at).toLocaleString()}</div>
-            <div className="font-semibold">{r.type?.toUpperCase?.() ? r.type.toUpperCase() : 'REPORT'} — Odo {r.odometer ?? '—'}</div>
-            <div className="text-sm">{r.summary}</div>
-          </a>
-        ))}
+        <div className="p-3 font-semibold">Previous issues</div>
+        {reports.map((r: any) => {
+          const defects = Array.isArray(r.defects) ? r.defects : []
+          const openCount = defects.filter((d: any) => !d.resolved).length
+          const resolvedCount = defects.filter((d: any) => d.resolved).length
+          const statusText = openCount > 0 ? 'Unresolved' : 'Resolved'
+
+          return (
+            <a
+              key={r.id}
+              href={`/reports/${r.id}`}
+              className="block p-3 rounded-xl border hover:bg-gray-50"
+            >
+              <div className="text-sm text-gray-600">
+                {new Date(r.created_at).toLocaleString()}
+              </div>
+              <div className="font-semibold">
+                Previous issues — {statusText}
+              </div>
+              {(openCount + resolvedCount) > 0 && (
+                <div className="text-xs text-gray-600">
+                  {openCount} open / {resolvedCount} resolved
+                </div>
+              )}
+              {r.summary ? <div className="text-sm mt-1">{r.summary}</div> : null}
+            </a>
+          )
+        })}
+        {reports.length === 0 && (
+          <div className="p-3 text-sm text-gray-500">No previous issues.</div>
+        )}
       </div>
+
     </main>
   )
 }
