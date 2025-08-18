@@ -1,141 +1,167 @@
 'use client'
-const API = process.env.NEXT_PUBLIC_API!;
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { authHeaders } from '@/lib/api'
+import RequireAuth from '@/components/RequireAuth'
+import { API, authHeaders, jsonHeaders } from '@/lib/api'
 
 export default function ReportDetail() {
+  return (
+    <RequireAuth>
+      <ReportDetailInner />
+    </RequireAuth>
+  )
+}
+
+function ReportDetailInner() {
   const { id } = useParams() as { id: string }
   const [report, setReport] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState('')
 
-  async function reload() {
-    setLoading(true)
-    setError(null)
-    const r = await fetch(`${API}/reports/${id}`, { headers: authHeaders() })
-    if (!r.ok) {
-      setError(await r.text().catch(()=> 'Failed to load report'))
-      setLoading(false)
-      return
-    }
-    setReport(await r.json())
-    setLoading(false)
+  function reload() {
+    fetch(`${API}/reports/${id}`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(setReport)
+      .catch(async (r) => alert(typeof r?.text === 'function' ? await r.text() : 'Failed to load report'))
   }
 
-  useEffect(() => { reload() }, [id])
+  useEffect(reload, [id])
 
-  if (loading) return <main className="p-6">Loading...</main>
-  if (error) return <main className="p-6 text-red-600">{error}</main>
-  if (!report) return <main className="p-6">Not found.</main>
+  async function addNote(e: React.FormEvent) {
+    e.preventDefault()
+    const r = await fetch(`${API}/reports/${id}/notes`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ text: note })
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    setNote('')
+    reload()
+  }
+
+  async function toggleResolved(defectId: number, resolved: boolean) {
+    const r = await fetch(`${API}/defects/${defectId}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ resolved })
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    reload()
+  }
+
+  async function uploadPhotos(defectId: number, files: FileList) {
+    const fd = new FormData()
+    Array.from(files).forEach(f => fd.append('files', f))
+    const r = await fetch(`${API}/defects/${defectId}/photos`, {
+      method: 'POST',
+      headers: authHeaders(), // let browser set multipart boundary
+      body: fd
+    })
+    if (!r.ok) { alert(await r.text()); return }
+    reload()
+  }
+
+  if (!report) return <main className="p-6">Loading…</main>
 
   return (
     <main className="p-6 space-y-6">
-      {/* Back links */}
-      <div className="flex items-center justify-between">
-        <Link href={`/trucks/${report.truck?.id ?? ''}`} className="text-sm underline">
-          &larr; Back to Truck #{report.truck?.number}
-        </Link>
-        <Link href="/trucks" className="text-sm underline">Fleet</Link>
+      <a href={`/trucks/${report.truck.id}`} className="text-sm underline">&larr; Back to truck</a>
+
+      {/* NEW: Header formatting */}
+      <h1 className="text-2xl font-bold">Issue report for:</h1>
+      <div className="text-gray-800">
+        <span className="font-semibold">Truck #{report.truck.number}</span>
+        <span className="mx-2">•</span>
+        <span>{new Date(report.created_at).toLocaleString()}</span>
       </div>
 
-      {/* Header */}
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Report #{report.id}</h1>
-          <div className="text-sm text-gray-600">
-            {String(report.type || '').toUpperCase()} · {new Date(report.created_at).toLocaleString()} · Truck #{report.truck?.number}
-          </div>
-        </div>
-        <span
-          className={`px-2 py-1 text-xs rounded-full border ${
-            report.status === 'OPEN'
-              ? 'bg-yellow-50 border-yellow-300 text-yellow-800'
-              : 'bg-green-50 border-green-300 text-green-800'
-          }`}
-        >
-          {report.status}
-        </span>
-      </header>
+      {/* REMOVED: Summary block */}
 
-      {/* Meta */}
-      <section className="grid sm:grid-cols-3 gap-3">
-        <div className="border rounded-2xl p-3">
-          <div className="text-xs text-gray-500">Odometer</div>
-          <div className="font-semibold">{report.odometer ?? '—'}</div>
-        </div>
-        <div className="border rounded-2xl p-3">
-          <div className="text-xs text-gray-500">Driver</div>
-          <div className="font-semibold">{report.driver?.name ?? '—'}</div>
-        </div>
-        <div className="border rounded-2xl p-3">
-          <div className="text-xs text-gray-500">Summary</div>
-          <div className="font-semibold">{report.summary || '—'}</div>
-        </div>
-      </section>
-
-      {/* Issues (read-only) */}
-      <section className="border rounded-2xl overflow-hidden">
-        <div className="p-3 font-semibold border-b">Issues</div>
-        {(!report.defects || report.defects.length === 0) ? (
-          <div className="p-3 text-sm text-gray-500">No issues were recorded on this report.</div>
-        ) : (
-          <div className="divide-y">
+      {/* Defects list — no component/severity line */}
+      <section className="space-y-3">
+        <h2 className="font-semibold">Issues</h2>
+        {report.defects?.length ? (
+          <ul className="space-y-3">
             {report.defects.map((d: any) => (
-              <div key={d.id} className="p-3 space-y-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium">{d.description || '(no description)'}</div>
-                    <div className="text-xs text-gray-500">
-                      {(d.component || 'general')} · {(d.severity || 'minor')}
+              <li key={d.id} className="border rounded-xl p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="font-medium">
+                      {d.description || '(no description)'}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-0.5">
+                      {d.resolved ? 'Resolved' : 'Unresolved'}
                     </div>
                   </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full border ${
-                      d.resolved ? 'bg-green-50 border-green-300 text-green-800' : 'bg-red-50 border-red-300 text-red-800'
-                    }`}
+                  <button
+                    className="text-sm border rounded-lg px-2 py-1"
+                    onClick={() => toggleResolved(d.id, !d.resolved)}
                   >
-                    {d.resolved ? 'Resolved' : 'Open'}
-                  </span>
+                    {d.resolved ? 'Mark Unresolved' : 'Mark Resolved'}
+                  </button>
                 </div>
 
-                {d.photos && d.photos.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
+                {d.photos?.length ? (
+                  <div className="grid grid-cols-3 gap-2 mt-3">
                     {d.photos.map((p: any) => (
-                      <a key={p.id} href={p.path} target="_blank" rel="noreferrer" className="inline-block">
+                      <a
+                        key={p.id}
+                        href={p.path}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block border rounded-lg overflow-hidden"
+                      >
                         <img
                           src={p.path}
                           alt={p.caption || 'defect photo'}
-                          className="h-20 w-20 object-cover rounded-md border"
+                          className="w-full h-24 object-cover"
                         />
                       </a>
                     ))}
                   </div>
-                )}
-              </div>
+                ) : null}
+
+                {/* Keep ability to add photos to an issue */}
+                <div className="mt-3">
+                  <label className="text-sm block mb-1">Add photos</label>
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={(e) => e.target.files && uploadPhotos(d.id, e.target.files)}
+                  />
+                </div>
+              </li>
             ))}
-          </div>
+          </ul>
+        ) : (
+          <div className="text-sm text-gray-500">No issues on this report.</div>
         )}
       </section>
 
-      {/* Notes (read-only if provided by backend) */}
-      {report.notes && report.notes.length > 0 && (
-        <section className="border rounded-2xl overflow-hidden">
-          <div className="p-3 font-semibold border-b">Notes</div>
-          <div className="divide-y">
-            {report.notes.map((n: any) => (
-              <div key={n.id} className="p-3 text-sm">
-                <div className="text-gray-600">
-                  {new Date(n.created_at).toLocaleString()} — {n.author?.name ?? 'Unknown'}
-                </div>
-                <div>{n.text}</div>
+      {/* Notes */}
+      <section className="space-y-2">
+        <h2 className="font-semibold">Notes</h2>
+        <form onSubmit={addNote} className="flex gap-2">
+          <input
+            value={note}
+            onChange={e => setNote(e.target.value)}
+            placeholder="Leave a note"
+            className="border p-2 rounded-xl flex-1"
+          />
+          <button className="border rounded-xl px-3">Post</button>
+        </form>
+        <ul className="space-y-2">
+          {report.notes?.map((n: any) => (
+            <li key={n.id} className="border rounded-xl p-2">
+              <div className="text-sm text-gray-600">
+                {n.author?.name ?? 'User'} • {new Date(n.created_at).toLocaleString()}
               </div>
-            ))}
-          </div>
-        </section>
-      )}
+              <div>{n.text}</div>
+            </li>
+          ))}
+        </ul>
+      </section>
     </main>
   )
 }
