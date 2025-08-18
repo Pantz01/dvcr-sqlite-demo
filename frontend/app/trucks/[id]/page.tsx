@@ -1,42 +1,165 @@
 'use client'
-import { useEffect, useState, useRef } from 'react'
-import { useParams } from 'next/navigation'
-import { API, jsonHeaders, authHeaders } from '@/lib/api'
-import Link from 'next/link' // ← added
+import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
+import { useParams, useRouter } from 'next/navigation'
+import { API, authHeaders, jsonHeaders } from '@/lib/api'
+
+type Photo = {
+  id: number
+  path: string
+  caption?: string | null
+}
+
+type Defect = {
+  id: number
+  description?: string | null
+  resolved: boolean
+  photos?: Photo[]
+}
 
 export default function TruckDetail() {
   const { id } = useParams() as { id: string }
+  const router = useRouter()
+
   const [truck, setTruck] = useState<any>(null)
   const [reports, setReports] = useState<any[]>([])
+  const [activeReport, setActiveReport] = useState<any | null>(null)
   const [pm, setPm] = useState<any>(null)
 
-  // ↓↓↓ added state for issue + photos
+  const [busy, setBusy] = useState(false)
   const [issue, setIssue] = useState('')
-  const [files, setFiles] = useState<FileList | null>(null)
+  const [odo, setOdo] = useState<number>(0)
+
+  // photos for new issue
+  const [issueFiles, setIssueFiles] = useState<FileList | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
 
-  useEffect(() => {
-    fetch(`${API}/trucks/${id}`, { headers: authHeaders() }).then(r=>r.json()).then(setTruck)
-    fetch(`${API}/trucks/${id}/reports`, { headers: authHeaders() }).then(r=>r.json()).then(setReports)
-    fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() }).then(r=>r.json()).then(setPm)
-  }, [id])
+  function reloadBasics() {
+    fetch(`${API}/trucks/${id}`, { headers: authHeaders() })
+      .then(r=>r.json()).then((t) => { setTruck(t); setOdo(t?.odometer ?? 0) })
+    fetch(`${API}/trucks/${id}/reports?limit=25`, { headers: authHeaders() })
+      .then(r=>r.json()).then(async (list) => {
+        setReports(list || [])
+        const open = (list || []).find((x:any) => x.status === 'OPEN') || (list || [])[0] || null
+        if (open) {
+          const rr = await fetch(`${API}/reports/${open.id}`, { headers: authHeaders() })
+          setActiveReport(rr.ok ? await rr.json() : open)
+        } else {
+          setActiveReport(null)
+        }
+      })
+    fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() })
+      .then(r=>r.json()).then(setPm)
+  }
 
-  async function createReport(formData: FormData) {
-    const body = Object.fromEntries(Array.from(formData.entries())) as any
+  useEffect(reloadBasics, [id])
+
+  async function ensureReport(): Promise<any | null> {
+    if (activeReport) return activeReport
+    // create a minimal report when posting an issue/odometer
+    setBusy(true)
     const r = await fetch(`${API}/trucks/${id}/reports`, {
       method: 'POST',
       headers: jsonHeaders(),
-      body: JSON.stringify({
-        odometer: Number(body.odometer || 0),
-        summary: body.summary,
-        type: body.type || 'pre'
-      })
+      body: JSON.stringify({ type: 'pre', odometer: odo, summary: '' }),
     })
-    if (!r.ok) { alert(await r.text()); return }
+    setBusy(false)
+    if (!r.ok) { alert(await r.text()); return null }
     const created = await r.json()
-    setReports([created, ...reports])
-    // refresh PM box if odometer advanced
+    const rr = await fetch(`${API}/reports/${created.id}`, { headers: authHeaders() })
+    const full = rr.ok ? await rr.json() : created
+    setActiveReport(full)
+    setReports(prev => [full, ...prev.filter((p:any)=>p.id!==full.id)])
+    return full
+  }
+
+  async function saveOdometer() {
+    const rep = await ensureReport()
+    if (!rep) return
+    setBusy(true)
+    const r = await fetch(`${API}/reports/${rep.id}`, {
+      method: 'PATCH',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ odometer: odo }),
+    })
+    setBusy(false)
+    if (!r.ok) { alert(await r.text()); return }
+    // refresh PM + report
     fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() }).then(x=>x.json()).then(setPm)
+    await reloadActiveReport(rep.id)
+  }
+
+  async function uploadDefectPhotos(defectId: number, files: FileList) {
+    const fd = new FormData()
+    Array.from(files).forEach(f => fd.append('files', f))
+    const r = await fetch(`${API}/defects/${defectId}/photos`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    })
+    if (!r.ok) throw new Error(await r.text())
+  }
+
+  async function addIssue() {
+    const text = issue.trim()
+    if (!text && !issueFiles?.length) return
+    const rep = await ensureReport()
+    if (!rep) return
+    try {
+      setBusy(true)
+
+      // try combined endpoint if present
+      if (issueFiles && issueFiles.length > 0) {
+        const fd = new FormData()
+        fd.append('component', 'general')
+        fd.append('severity', 'minor')
+        if (text) fd.append('description', text)
+        Array.from(issueFiles).forEach(f => fd.append('files', f))
+        const r = await fetch(`${API}/reports/${rep.id}/defects-with-photos`, {
+          method: 'POST',
+          headers: authHeaders(),
+          body: fd,
+        })
+        if (r.ok) {
+          setIssue(''); setIssueFiles(null); if (fileRef.current) fileRef.current.value = ''
+          await reloadActiveReport(rep.id)
+          setBusy(false)
+          return
+        }
+      }
+
+      // fallback two-step
+      const r1 = await fetch(`${API}/reports/${rep.id}/defects`, {
+        method: 'POST',
+        headers: jsonHeaders(),
+        body: JSON.stringify({ component: 'general', severity: 'minor', description: text }),
+      })
+      if (!r1.ok) throw new Error(await r1.text())
+      const defect = await r1.json()
+      if (issueFiles && issueFiles.length > 0) {
+        await uploadDefectPhotos(defect.id, issueFiles)
+      }
+      setIssue(''); setIssueFiles(null); if (fileRef.current) fileRef.current.value = ''
+      await reloadActiveReport(rep.id)
+    } catch (err:any) {
+      alert(err?.message || 'Failed to add issue')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reloadActiveReport(reportId: number) {
+    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
+    if (!rr.ok) return
+    const full = await rr.json()
+    setActiveReport(full)
+    setReports(prev => prev.map((p:any)=>p.id===full.id ? full : p))
+  }
+
+  async function loadReport(reportId: number) {
+    const rr = await fetch(`${API}/reports/${reportId}`, { headers: authHeaders() })
+    if (!rr.ok) { alert(await rr.text()); return }
+    setActiveReport(await rr.json())
   }
 
   async function addService(e:any) {
@@ -53,72 +176,17 @@ export default function TruckDetail() {
     e.currentTarget.reset()
   }
 
-  // ↓↓↓ ensure there’s an OPEN report (added)
-  async function ensureOpenReport(): Promise<any | null> {
-    const open = reports.find(r => r.status === 'OPEN')
-    if (open) return open
-    // create a minimal new report (pre-trip)
-    const r = await fetch(`${API}/trucks/${id}/reports`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        odometer: Number(truck?.odometer || 0),
-        summary: '',
-        type: 'pre'
-      })
-    })
-    if (!r.ok) { alert(await r.text()); return null }
-    const created = await r.json()
-    setReports(prev => [created, ...prev])
-    return created
-  }
-
-  // ↓↓↓ add defect + optional photos (added)
-  async function addIssueWithPhotos(e: React.FormEvent) {
-    e.preventDefault()
-    const text = issue.trim()
-    if (!text && !files?.length) return
-    const rep = await ensureOpenReport()
-    if (!rep) return
-
-    // 1) create defect
-    const r1 = await fetch(`${API}/reports/${rep.id}/defects`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ component: 'general', severity: 'minor', description: text })
-    })
-    if (!r1.ok) { alert(await r1.text()); return }
-    const defect = await r1.json()
-
-    // 2) upload photos if any
-    if (files && files.length > 0) {
-      const fd = new FormData()
-      Array.from(files).forEach(f => fd.append('files', f))
-      const r2 = await fetch(`${API}/defects/${defect.id}/photos`, {
-        method: 'POST',
-        headers: authHeaders(), // let the browser set multipart boundary
-        body: fd
-      })
-      if (!r2.ok) { alert(await r2.text()); return }
-    }
-
-    // cleanup + refresh
-    setIssue('')
-    setFiles(null)
-    if (fileRef.current) fileRef.current.value = ''
-    // refresh reports list so newest OPEN is at top (optional simple refresh)
-    fetch(`${API}/trucks/${id}/reports`, { headers: authHeaders() }).then(r=>r.json()).then(setReports)
-    // refresh PM in case odometer changed elsewhere
-    fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() }).then(x=>x.json()).then(setPm)
-  }
-
   if (!truck) return <main className="p-6">Loading…</main>
+
+  const defects = useMemo(() => activeReport?.defects || [], [activeReport])
 
   return (
     <main className="p-6 space-y-6">
-      {/* ← added back link */}
-      <div>
-        <Link href="/trucks" className="text-sm underline">&larr; Back to trucks</Link>
+      <div className="flex items-center justify-between">
+        <button className="text-sm underline" onClick={()=>router.push('/trucks')}>&larr; Back to list</button>
+        <Link href={`/reports/${activeReport?.id ?? ''}`} className="text-sm underline">
+          View report
+        </Link>
       </div>
 
       <h1 className="text-2xl font-bold">Truck #{truck.number}</h1>
@@ -132,23 +200,31 @@ export default function TruckDetail() {
         </div>
       )}
 
-      <form action={createReport} className="grid md:grid-cols-4 gap-2 border rounded-2xl p-4">
-        <input name="odometer" placeholder="Odometer" className="border p-2 rounded-xl"/>
-        <select name="type" className="border p-2 rounded-xl">
-          <option value="pre">Pre-trip</option>
-          <option value="post">Post-trip</option>
-        </select>
-        <input name="summary" placeholder="Summary (optional)" className="border p-2 rounded-xl md:col-span-1"/>
-        <button className="border rounded-2xl p-2">New Report</button>
-      </form>
+      {/* Odometer quick-save (kept) */}
+      <div className="grid md:grid-cols-3 gap-2 border rounded-2xl p-4 items-end">
+        <label className="grid gap-1 text-sm">
+          <span className="text-gray-600">Odometer</span>
+          <input
+            name="odometer"
+            placeholder="Odometer"
+            className="border p-2 rounded-xl"
+            value={odo}
+            onChange={(e)=>setOdo(parseInt(e.target.value || '0', 10))}
+          />
+        </label>
+        <div />
+        <button className="border rounded-2xl p-2" onClick={saveOdometer} disabled={busy}>
+          {busy ? 'Saving…' : 'Save Odometer'}
+        </button>
+      </div>
 
-      {/* ↓↓↓ added: quick “Add Issue + Photos” for this truck */}
-      <form onSubmit={addIssueWithPhotos} className="grid md:grid-cols-6 gap-2 border rounded-2xl p-4">
+      {/* ADD ISSUE (kept) */}
+      <section className="grid md:grid-cols-6 gap-2 border rounded-2xl p-4 items-center">
         <input
+          className="border p-2 rounded-xl md:col-span-3"
+          placeholder="Add an issue (e.g., brake light out)"
           value={issue}
           onChange={(e) => setIssue(e.target.value)}
-          placeholder="Describe the issue (e.g., brake light out)"
-          className="border p-2 rounded-xl md:col-span-3"
         />
         <input
           ref={fileRef}
@@ -156,11 +232,15 @@ export default function TruckDetail() {
           accept="image/*"
           multiple
           className="border p-2 rounded-xl md:col-span-2"
-          onChange={(e) => setFiles(e.currentTarget.files)}
+          onChange={(e) => setIssueFiles(e.currentTarget.files)}
+          aria-label="Attach photos"
         />
-        <button className="border rounded-2xl p-2">Add Issue</button>
-      </form>
+        <button className="border rounded-2xl p-2" onClick={addIssue} disabled={busy}>
+          {busy ? 'Adding…' : 'Add issue'}
+        </button>
+      </section>
 
+      {/* SERVICE LOG (unchanged) */}
       <form onSubmit={addService} className="grid md:grid-cols-3 gap-2 border rounded-2xl p-4">
         <select name="service_type" className="border p-2 rounded-xl">
           <option value="oil">Oil change</option>
@@ -170,15 +250,19 @@ export default function TruckDetail() {
         <button className="border rounded-2xl p-2">Log service</button>
       </form>
 
-      <div className="space-y-2">
-        {reports.map(r => (
-          <a key={r.id} href={`/reports/${r.id}`} className="block p-3 rounded-xl border hover:bg-gray-50">
-            <div className="text-sm text-gray-600">{new Date(r.created_at).toLocaleString()}</div>
-            <div className="font-semibold">{r.type?.toUpperCase()} — Odo {r.odometer ?? '—'}</div>
-            <div className="text-sm">{r.summary}</div>
-          </a>
-        ))}
-      </div>
+      {/* RECENT REPORTS (read-only links) */}
+      {reports.length > 0 && (
+        <div className="space-y-2">
+          <div className="font-semibold">Recent Reports</div>
+          {reports.map(r => (
+            <a key={r.id} href={`/reports/${r.id}`} className="block p-3 rounded-xl border hover:bg-gray-50">
+              <div className="text-sm text-gray-600">{new Date(r.created_at).toLocaleString()}</div>
+              <div className="font-semibold">{String(r.type || '').toUpperCase()} — Odo {r.odometer ?? '—'}</div>
+              {r.summary ? <div className="text-sm">{r.summary}</div> : null}
+            </a>
+          ))}
+        </div>
+      )}
     </main>
   )
 }
