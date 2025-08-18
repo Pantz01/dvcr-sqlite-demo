@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import RequireAuth from '@/components/RequireAuth'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
+import Link from 'next/link' // ← added
 
 type Truck = {
   id: number
@@ -263,16 +264,17 @@ function DriverTrucksInner() {
           <div className="p-3 font-semibold">Select Truck</div>
           <div className="max-h-[60vh] overflow-auto divide-y">
             {trucks.map(t => (
-              <button
+              <Link
                 key={t.id}
-                className={`w-full text-left p-3 hover:bg-gray-50 ${selected?.id === t.id ? 'bg-gray-50' : ''}`}
-                onClick={() => selectTruck(t)}
+                href={`/trucks/${t.id}`}
+                className={`block text-left p-3 hover:bg-gray-50 ${selected?.id === t.id ? 'bg-gray-50' : ''}`}
+                aria-label={`Open truck ${t.number}`}
               >
                 <div className="font-medium">{t.number}</div>
                 <div className="text-xs text-gray-600">
                   VIN {t.vin || '—'} · Odo {t.odometer ?? 0} · {t.active ? 'Active' : 'Inactive'}
                 </div>
-              </button>
+              </Link>
             ))}
             {trucks.length === 0 && <div className="p-3 text-sm text-gray-500">No trucks.</div>}
           </div>
