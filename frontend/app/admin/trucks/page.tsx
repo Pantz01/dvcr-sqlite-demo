@@ -5,7 +5,7 @@ import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
 import Link from 'next/link'
-import * as XLSX from 'xlsx' // ⬅️ ADDED
+import * as XLSX from 'xlsx' // ⬅️ keep
 
 type Truck = {
   id: number
@@ -168,7 +168,7 @@ function AdminTrucksInner() {
     loadTrucks()
   }
 
-  // ⬇️⬇️⬇️ ADDED: Excel export helpers
+  // ⬇️ Excel export (alerts) — kept, just label changed + compact button style
   function statusFromRemaining(remaining: number) {
     if (remaining <= 0) return 'OVERDUE'
     if (remaining <= 1000) return 'DUE SOON'
@@ -216,7 +216,7 @@ function AdminTrucksInner() {
     XLSX.utils.book_append_sheet(wb, ws, 'PM Alerts')
     XLSX.writeFile(wb, 'truck_pm_alerts.xlsx')
   }
-  // ⬆️⬆️⬆️ END ADDED
+  // ⬆️ END alerts export
 
   return (
     <main className="p-6 space-y-6">
@@ -268,19 +268,20 @@ function AdminTrucksInner() {
             <div className="p-3 font-semibold border-b flex items-center justify-between">
               <span>Details</span>
               <div className="flex gap-2">
-                {/* ⬇️ ADDED: Export button */}
+                {/* Compact export buttons */}
                 <button
-                  className="px-3 py-1.5 border rounded-xl"
+                  className="px-2 py-1 text-xs border rounded-lg"
                   onClick={exportAlertsExcel}
-                  title="Export PM alerts for all trucks to Excel"
+                  title="Export PM alerts for all trucks"
                 >
-                  Export Alerts (Excel)
+                  Export Alerts
                 </button>
-                {/* ⬆️ ADDED */}
+
+                <ExportAllIssuesButton />
 
                 {selected && !isEditing && (
                   <button
-                    className="px-3 py-1.5 border rounded-xl"
+                    className="px-2 py-1 text-xs border rounded-lg"
                     onClick={() => setIsEditing(true)}
                   >
                     Edit
@@ -289,14 +290,14 @@ function AdminTrucksInner() {
                 {selected && isEditing && (
                   <>
                     <button
-                      className="px-3 py-1.5 border rounded-xl"
+                      className="px-2 py-1 text-xs border rounded-lg"
                       onClick={cancelEdits}
                       disabled={busy}
                     >
                       Cancel
                     </button>
                     <button
-                      className="px-3 py-1.5 border rounded-xl bg-black text-white disabled:opacity-50"
+                      className="px-2 py-1 text-xs border rounded-lg bg-black text-white disabled:opacity-50"
                       onClick={saveEdits}
                       disabled={busy}
                     >
@@ -482,5 +483,118 @@ function AddServiceCard({
         Tip: To change the “next due”, add a service at the odometer that represents the last completed service.
       </p>
     </div>
+  )
+}
+
+/* =======================
+   Export All Issues (CSV)
+   ======================= */
+
+function ExportAllIssuesButton() {
+  const [busy, setBusy] = useState(false)
+
+  async function fetchWithHeaders(url: string) {
+    const r = await fetch(url, { headers: authHeaders() })
+    if (!r.ok) throw new Error(await r.text().catch(() => 'Request failed'))
+    const data = await r.json()
+    const total = Number(r.headers.get('X-Total-Count') || '0')
+    return { data, total }
+  }
+
+  // Page through a truck’s reports using X-Total-Count/skip/limit
+  async function fetchAllReportsForTruck(truckId: number) {
+    const all: any[] = []
+    const limit = 500
+    let skip = 0
+    let total = Infinity
+
+    while (skip < total) {
+      const { data, total: t } = await fetchWithHeaders(
+        `${API}/trucks/${truckId}/reports?skip=${skip}&limit=${limit}`
+      )
+      total = isFinite(t) && t > 0 ? t : data.length
+      all.push(...data)
+      skip += limit
+      // Safety stop if server doesn’t send X-Total-Count
+      if (!isFinite(t) && data.length < limit) break
+    }
+    return all
+  }
+
+  function toCsv(rows: Record<string, any>[], headers: string[]) {
+    const escapeCell = (v: any) => {
+      const s = String(v ?? '')
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+    }
+    const lines: string[] = []
+    lines.push(headers.join(','))
+    if (rows.length === 0) {
+      lines.push([ '', '', '', '' ].join(','))
+    } else {
+      for (const row of rows) {
+        lines.push(headers.map(h => escapeCell(row[h])).join(','))
+      }
+    }
+    return lines.join('\n')
+  }
+
+  async function exportAllIssuesCsv() {
+    try {
+      setBusy(true)
+
+      // 1) Get all trucks
+      const trucksRes = await fetch(`${API}/trucks`, { headers: authHeaders() })
+      if (!trucksRes.ok) throw new Error(await trucksRes.text())
+      const trucks: { id:number; number:string }[] = await trucksRes.json()
+
+      // 2) For each truck, fetch reports (paged) and flatten defects
+      const allRows: Record<string, any>[] = []
+      for (const t of trucks) {
+        const reports = await fetchAllReportsForTruck(t.id)
+        for (const r of reports) {
+          const createdAt = r?.created_at
+          const defects = Array.isArray(r?.defects) ? r.defects : []
+          for (const d of defects) {
+            const issueDate = createdAt ? new Date(createdAt).toISOString() : ''
+            const issueText = d?.description ?? ''
+            const resolvedDate = d?.resolved
+              ? (d?.resolved_at ? new Date(d.resolved_at).toISOString() : '')
+              : 'Unresolved'
+            allRows.push({
+              'Truck': t.number ?? t.id,
+              'Date of Issue': issueDate,
+              'Issue': issueText,
+              'Date Resolved / Status': resolvedDate,
+            })
+          }
+        }
+      }
+
+      // 3) Build + download CSV
+      const headers = ['Truck', 'Date of Issue', 'Issue', 'Date Resolved / Status']
+      const csv = toCsv(allRows, headers)
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      a.download = `all-trucks-issues-${ts}.csv`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (err: any) {
+      alert(err?.message || 'Export failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <button
+      onClick={exportAllIssuesCsv}
+      disabled={busy}
+      className="px-2 py-1 text-xs border rounded-lg disabled:opacity-50"
+      title="Export all issues for all trucks"
+    >
+      {busy ? 'Exporting…' : 'Export All Issues'}
+    </button>
   )
 }
