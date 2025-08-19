@@ -30,6 +30,8 @@ type Defect = {
   resolved_at?: string | null
   _reported_at: string
   _report_id: number
+  // ⬇️ NEW: notes are now per-defect
+  notes?: Note[]
 }
 
 type Report = {
@@ -39,7 +41,7 @@ type Report = {
   status: 'OPEN' | 'CLOSED' | string
   summary?: string | null
   defects?: Omit<Defect, '_reported_at' | '_report_id'>[]
-  notes?: Note[]
+  notes?: Note[] // (kept for compatibility, but not used for issue notes anymore)
 }
 
 export default function AdminTruckPage() {
@@ -83,6 +85,7 @@ function TruckInner() {
         if (!r.ok) throw new Error(await r.text())
         const list: Report[] = await r.json()
 
+        // hydrate each report (ensures defects include photos + notes)
         const full = await Promise.all(
           list.map(async (rp) => {
             const rr = await fetch(`${API}/reports/${rp.id}`, { headers: authHeaders() })
@@ -99,13 +102,13 @@ function TruckInner() {
     })()
   }, [truckId])
 
-  // Flatten defects and stamp report meta
+  // Flatten defects and stamp report meta (carry through defect.notes)
   const allIssues: Defect[] = useMemo(() => {
     const rows: Defect[] = []
     for (const r of reports) {
       const ds = r.defects || []
       for (const d of ds) {
-        rows.push({ ...d, _reported_at: r.created_at, _report_id: r.id })
+        rows.push({ ...(d as any), _reported_at: r.created_at, _report_id: r.id })
       }
     }
     rows.sort((a, b) => new Date(b._reported_at).getTime() - new Date(a._reported_at).getTime())
@@ -127,14 +130,6 @@ function TruckInner() {
     const start = (prevPage - 1) * PAGE_SIZE
     return previousIssues.slice(start, start + PAGE_SIZE)
   }, [previousIssues, prevPage])
-
-  const notesByReport = useMemo(() => {
-    const map = new Map<number, Note[]>()
-    for (const r of reports) {
-      map.set(r.id, r.notes || [])
-    }
-    return map
-  }, [reports])
 
   async function reloadAfterChange() {
     try {
@@ -180,11 +175,11 @@ function TruckInner() {
     await reloadAfterChange()
   }
 
-  // Add a note (posts to the report that this issue belongs to)
-  async function addNoteForIssue(defectId: number, reportId: number) {
+  // ⬇️ CHANGED: add a note to a specific defect (not to the report)
+  async function addNoteForDefect(defectId: number) {
     const text = (newNoteText[defectId] || '').trim()
     if (!text) return
-    const r = await fetch(`${API}/reports/${reportId}/notes`, {
+    const r = await fetch(`${API}/defects/${defectId}/notes`, {
       method: 'POST',
       headers: jsonHeaders(),
       body: JSON.stringify({ text }),
@@ -271,7 +266,7 @@ function TruckInner() {
           <>
             <div className="divide-y">
               {activeSlice.map(d => {
-                const notes = notesByReport.get(d._report_id) || []
+                const notes = d.notes || []  // ⬅️ notes now come from the defect
                 const isOpen = !!openNotes[d.id]
                 return (
                   <div key={d.id} className="p-3 text-sm">
@@ -299,7 +294,7 @@ function TruckInner() {
                       {isOpen && (
                         <div className="mt-2 rounded-lg border">
                           {notes.length === 0 ? (
-                            <div className="p-3 text-xs text-gray-500">No notes for this issue’s report.</div>
+                            <div className="p-3 text-xs text-gray-500">No notes for this issue.</div>
                           ) : (
                             notes.map(n => (
                               <div key={n.id} className="p-3 border-t first:border-t-0">
@@ -321,7 +316,7 @@ function TruckInner() {
                             />
                             <button
                               className="border rounded-lg px-3 py-1.5 text-xs"
-                              onClick={() => addNoteForIssue(d.id, d._report_id)}
+                              onClick={() => addNoteForDefect(d.id)}
                             >
                               Add note
                             </button>
@@ -371,7 +366,7 @@ function TruckInner() {
           <>
             <div className="divide-y">
               {previousSlice.map(d => {
-                const notes = notesByReport.get(d._report_id) || []
+                const notes = d.notes || []  // ⬅️ notes now come from the defect
                 const isOpen = !!openNotes[d.id]
                 return (
                   <div key={d.id} className="p-3 text-sm">
@@ -399,7 +394,7 @@ function TruckInner() {
                       {isOpen && (
                         <div className="mt-2 rounded-lg border">
                           {notes.length === 0 ? (
-                            <div className="p-3 text-xs text-gray-500">No notes for this issue’s report.</div>
+                            <div className="p-3 text-xs text-gray-500">No notes for this issue.</div>
                           ) : (
                             notes.map(n => (
                               <div key={n.id} className="p-3 border-t first:border-t-0">
@@ -421,7 +416,7 @@ function TruckInner() {
                             />
                             <button
                               className="border rounded-lg px-3 py-1.5 text-xs"
-                              onClick={() => addNoteForIssue(d.id, d._report_id)}
+                              onClick={() => addNoteForDefect(d.id)}
                             >
                               Add note
                             </button>
