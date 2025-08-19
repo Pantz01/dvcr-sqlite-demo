@@ -181,6 +181,21 @@ class PMAppointment(Base):
 
 Base.metadata.create_all(bind=engine)
 
+# --- Lightweight migration: ensure notes.defect_id exists (for existing DBs) ---
+if DB_URL.startswith("sqlite"):
+    try:
+        with engine.connect() as conn:
+            cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info('notes')")]
+            if 'defect_id' not in cols:
+                conn.exec_driver_sql("ALTER TABLE notes ADD COLUMN defect_id INTEGER REFERENCES defects(id)")
+    except Exception as e:
+        # Don't crash app startup if ALTER fails; you'll still see this in logs
+        print("SQLite lightweight migration warning:", e)
+else:
+    # For Postgres/MySQL you'd normally run a real migration (Alembic). Skipping here.
+    pass
+# -------------------------------------------------------------------------------
+
 # ----------------- Auth helpers -----------------
 import jwt
 from passlib.hash import bcrypt
