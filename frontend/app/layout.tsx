@@ -3,8 +3,8 @@ import Topbar from '@/components/Topbar'
 import type { ReactNode } from 'react'
 
 export const metadata = {
-  title: 'DVCR',
-  description: 'Driver Vehicle Condition Reports',
+  title: 'FleetVision',
+  description: 'See every issue. Solve every problem.',
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {
