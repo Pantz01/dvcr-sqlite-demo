@@ -115,6 +115,8 @@ class Defect(Base):
     report = relationship("Report", back_populates="defects")
     photos = relationship("Photo", back_populates="defect", cascade="all, delete-orphan")
     resolved_by = relationship("User")
+    # ⬅️ NEW: defect-scoped notes
+    notes = relationship("Note", back_populates="defect", cascade="all, delete-orphan")
 
 class Photo(Base):
     __tablename__ = "photos"
@@ -133,6 +135,9 @@ class Note(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     report = relationship("Report", back_populates="notes")
     author = relationship("User")
+    # ⬅️ NEW: link a note to a specific defect (optional)
+    defect_id = Column(Integer, ForeignKey("defects.id"), nullable=True)
+    defect = relationship("Defect", back_populates="notes")
 
 class ServiceRecord(Base):
     __tablename__ = "service_records"
@@ -259,23 +264,33 @@ class DefectIn(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
 
+class NoteIn(BaseModel):
+    text: str
+
+class UserLite(BaseModel):
+    id: int
+    name: str
+    email: str
+    role: str
+    class Config:
+        from_attributes = True
+
+class NoteOut(BaseModel):
+    id: int
+    author: UserLite
+    text: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
 class DefectOut(DefectIn):
     id: int
     resolved: bool
     resolved_by_id: Optional[int] = None
     resolved_at: Optional[datetime] = None
     photos: List[PhotoOut] = []
-    class Config:
-        from_attributes = True
-
-class NoteIn(BaseModel):
-    text: str
-
-class NoteOut(BaseModel):
-    id: int
-    author: UserOut
-    text: str
-    created_at: datetime
+    # ⬅️ NEW: per-issue notes in API output
+    notes: List[NoteOut] = []
     class Config:
         from_attributes = True
 
@@ -707,6 +722,9 @@ def list_reports(
         _ = r.defects, r.notes
         for d in r.defects:
             _ = d.photos
+            _ = d.notes
+            for n in d.notes:
+                _ = n.author
 
     response.headers["X-Total-Count"] = str(total)
     return items
@@ -728,7 +746,11 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
     if not r: raise HTTPException(404, "Report not found")
     # eager-load collections
     _ = r.defects, r.notes
-    for d in r.defects: _ = d.photos
+    for d in r.defects:
+        _ = d.photos
+        _ = d.notes
+        for n in d.notes:
+            _ = n.author
     return r
 
 # ReportPatch supports 'type'
@@ -865,6 +887,28 @@ async def upload_photos(defect_id: int, files: List[UploadFile] = File(...), cap
     db.commit()
     for p in saved: db.refresh(p)
     return saved
+
+# ⬇️ NEW: list notes for a single defect
+@app.get("/defects/{defect_id}/notes", response_model=List[NoteOut])
+def list_defect_notes(defect_id: int, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    d = db.get(Defect, defect_id)
+    if not d:
+        raise HTTPException(404, "Defect not found")
+    notes = db.query(Note).filter(Note.defect_id == defect_id).order_by(Note.created_at.asc()).all()
+    for n in notes:
+        _ = n.author
+    return notes
+
+# ⬇️ NEW: add a note to a single defect
+@app.post("/defects/{defect_id}/notes", response_model=NoteOut)
+def add_defect_note(defect_id: int, payload: NoteIn, user: User = Depends(require_user), db: Session = Depends(get_db)):
+    d = db.get(Defect, defect_id)
+    if not d:
+        raise HTTPException(404, "Defect not found")
+    n = Note(report_id=d.report_id, author_id=user.id, text=payload.text, defect_id=defect_id)
+    db.add(n); db.commit(); db.refresh(n)
+    _ = n.author
+    return n
 
 # DELETE a defect (and its photos)
 @app.delete("/defects/{defect_id}", status_code=204)
