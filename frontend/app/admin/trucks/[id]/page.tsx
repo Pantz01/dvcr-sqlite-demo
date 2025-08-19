@@ -30,7 +30,7 @@ type Defect = {
   resolved_at?: string | null
   _reported_at: string
   _report_id: number
-  // ⬇️ NEW: notes are now per-defect
+  // ⬇️ notes are per-defect
   notes?: Note[]
 }
 
@@ -41,7 +41,7 @@ type Report = {
   status: 'OPEN' | 'CLOSED' | string
   summary?: string | null
   defects?: Omit<Defect, '_reported_at' | '_report_id'>[]
-  notes?: Note[] // (kept for compatibility, but not used for issue notes anymore)
+  notes?: Note[] // (kept for compatibility)
 }
 
 export default function AdminTruckPage() {
@@ -71,6 +71,14 @@ function TruckInner() {
   // per-issue notes UI
   const [openNotes, setOpenNotes] = useState<Record<number, boolean>>({})
   const [newNoteText, setNewNoteText] = useState<Record<number, string>>({}) // keyed by defect.id
+
+  // 🔹 Date formatter: 8-19-2025 (no time)
+  const fmtDate = (value: string | Date | null | undefined) => {
+    if (!value) return ''
+    const d = new Date(value)
+    if (isNaN(d.getTime())) return ''
+    return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }).replace(/\//g, '-')
+  }
 
   useEffect(() => {
     setError(null)
@@ -175,7 +183,7 @@ function TruckInner() {
     await reloadAfterChange()
   }
 
-  // ⬇️ CHANGED: add a note to a specific defect (not to the report)
+  // Add a note to a specific defect
   async function addNoteForDefect(defectId: number) {
     const text = (newNoteText[defectId] || '').trim()
     if (!text) return
@@ -189,15 +197,13 @@ function TruckInner() {
     await reloadAfterChange()
   }
 
-  // Export CSV (Date of Issue, Issue, Date Resolved / Status)
+  // Export CSV (Date of Issue, Issue, Date Resolved / Status) — dates simplified
   function exportAllIssuesCsv() {
     const rows = allIssues.map(d => {
-      const issueDate = new Date(d._reported_at).toISOString()
+      const issueDate = fmtDate(d._reported_at)
       const issueText = d.description ?? ''
       const resolvedDate = d.resolved
-        ? (d as any).resolved_at
-          ? new Date((d as any).resolved_at as string).toISOString()
-          : ''
+        ? (d.resolved_at ? fmtDate(d.resolved_at) : '')
         : 'Unresolved'
       return {
         'Date of Issue': issueDate,
@@ -266,7 +272,7 @@ function TruckInner() {
           <>
             <div className="divide-y">
               {activeSlice.map(d => {
-                const notes = d.notes || []  // ⬅️ notes now come from the defect
+                const notes = d.notes || []
                 const isOpen = !!openNotes[d.id]
                 return (
                   <div key={d.id} className="p-3 text-sm">
@@ -274,7 +280,7 @@ function TruckInner() {
                       <div className="flex-1">
                         <div className="font-medium">{d.description || '(no description)'}</div>
                         <div className="text-xs text-gray-600">
-                          Reported {new Date(d._reported_at).toLocaleString()}
+                          Reported {fmtDate(d._reported_at)}
                         </div>
                       </div>
                       <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
@@ -299,7 +305,7 @@ function TruckInner() {
                             notes.map(n => (
                               <div key={n.id} className="p-3 border-t first:border-t-0">
                                 <div className="text-[11px] text-gray-600">
-                                  {n.author?.name || 'Unknown'} • {new Date(n.created_at).toLocaleString()}
+                                  {n.author?.name || 'Unknown'} • {fmtDate(n.created_at)}
                                 </div>
                                 <div className="text-sm">{n.text}</div>
                               </div>
@@ -366,7 +372,7 @@ function TruckInner() {
           <>
             <div className="divide-y">
               {previousSlice.map(d => {
-                const notes = d.notes || []  // ⬅️ notes now come from the defect
+                const notes = d.notes || []
                 const isOpen = !!openNotes[d.id]
                 return (
                   <div key={d.id} className="p-3 text-sm">
@@ -374,7 +380,7 @@ function TruckInner() {
                       <div className="flex-1">
                         <div className="font-medium">{d.description || '(no description)'}</div>
                         <div className="text-xs text-gray-600">
-                          Reported {new Date(d._reported_at).toLocaleString()} · Resolved {d.resolved_at ? new Date(d.resolved_at).toLocaleString() : '(date not recorded)'}
+                          Reported {fmtDate(d._reported_at)} · Resolved {d.resolved_at ? fmtDate(d.resolved_at) : '(date not recorded)'}
                         </div>
                       </div>
                       <button className="text-xs underline" onClick={() => editIssue(d)}>Edit</button>
@@ -399,7 +405,7 @@ function TruckInner() {
                             notes.map(n => (
                               <div key={n.id} className="p-3 border-t first:border-t-0">
                                 <div className="text-[11px] text-gray-600">
-                                  {n.author?.name || 'Unknown'} • {new Date(n.created_at).toLocaleString()}
+                                  {n.author?.name || 'Unknown'} • {fmtDate(n.created_at)}
                                 </div>
                                 <div className="text-sm">{n.text}</div>
                               </div>
