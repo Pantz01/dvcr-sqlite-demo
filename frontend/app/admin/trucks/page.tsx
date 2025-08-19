@@ -7,6 +7,14 @@ import { API, authHeaders, jsonHeaders } from '@/lib/api'
 import Link from 'next/link'
 import * as XLSX from 'xlsx' // ⬅️ keep
 
+// ---- date helper (M-D-YYYY, no leading zeros) ----
+function formatDateMDY(input?: string | number | Date | null) {
+  if (!input) return ''
+  const d = new Date(input)
+  if (isNaN(d.getTime())) return ''
+  return `${d.getMonth() + 1}-${d.getDate()}-${d.getFullYear()}`
+}
+
 type Truck = {
   id: number
   number: string
@@ -168,7 +176,7 @@ function AdminTrucksInner() {
     loadTrucks()
   }
 
-  // ⬇️ Excel export (alerts) — kept, just label changed + compact button style
+  // ⬇️ Excel export (alerts) — kept, button label compact
   function statusFromRemaining(remaining: number) {
     if (remaining <= 0) return 'OVERDUE'
     if (remaining <= 1000) return 'DUE SOON'
@@ -389,7 +397,7 @@ function AdminTrucksInner() {
                       <div key={s.id} className="p-3 flex items-center gap-3">
                         <div className="w-20 uppercase text-xs">{s.service_type}</div>
                         <div className="flex-1 text-sm">
-                          Odo {s.odometer} · {new Date(s.created_at).toLocaleString()}
+                          Odo {s.odometer} · {formatDateMDY(s.created_at)}
                           {s.notes ? <span className="text-gray-600"> · {s.notes}</span> : null}
                         </div>
                         <button className="text-xs underline text-red-600" onClick={() => deleteService(s.id)}>
@@ -555,10 +563,10 @@ function ExportAllIssuesButton() {
           const createdAt = r?.created_at
           const defects = Array.isArray(r?.defects) ? r.defects : []
           for (const d of defects) {
-            const issueDate = createdAt ? new Date(createdAt).toISOString() : ''
+            const issueDate = createdAt ? formatDateMDY(createdAt) : ''
             const issueText = d?.description ?? ''
             const resolvedDate = d?.resolved
-              ? (d?.resolved_at ? new Date(d.resolved_at).toISOString() : '')
+              ? (d?.resolved_at ? formatDateMDY(d.resolved_at) : '')
               : 'Unresolved'
             allRows.push({
               'Truck': t.number ?? t.id,
@@ -570,13 +578,13 @@ function ExportAllIssuesButton() {
         }
       }
 
-      // 3) Build + download CSV
+      // 3) Build + download CSV (date-only, no time)
       const headers = ['Truck', 'Date of Issue', 'Issue', 'Date Resolved / Status']
       const csv = toCsv(allRows, headers)
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
-      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      const ts = formatDateMDY(new Date()) // cleaner filename date
       a.download = `all-trucks-issues-${ts}.csv`
       a.click()
       URL.revokeObjectURL(a.href)
