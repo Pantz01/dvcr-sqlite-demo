@@ -153,33 +153,33 @@ export default function TruckDetail() {
           value={issue}
           onChange={(e) => setIssue(e.target.value)}
           placeholder="Describe issue"
-          className="border p-2 rounded col-span-2"
+          className="border p-1 rounded col-span-2 text-xs"
         />
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Add note"
-          className="border p-2 rounded col-span-2"
+          className="border p-1 rounded col-span-2 text-xs"
         />
         <input
           ref={fileRef}
           type="file"
           accept="image/*"
           multiple
-          className="border p-2 rounded col-span-1"
+          className="border p-1 rounded col-span-1 text-xs"
           onChange={(e) => setFiles(e.currentTarget.files)}
         />
-        <button className="bg-blue-600 text-white rounded px-3 py-2 text-sm hover:bg-blue-700">Add</button>
+        <button className="border rounded px-2 py-1 text-xs hover:bg-gray-100">Add</button>
       </form>
 
-      {/* Add service (restricted at API/backend to managers/admins) */}
+      {/* Add service */}
       <form onSubmit={addService} className="grid md:grid-cols-3 gap-2 border rounded-xl p-3 text-sm">
-        <select name="service_type" className="border p-2 rounded">
+        <select name="service_type" className="border p-1 rounded text-xs">
           <option value="oil">Oil change</option>
           <option value="chassis">Chassis lube</option>
         </select>
-        <input name="odometer" placeholder="Odometer" className="border p-2 rounded" required/>
-        <button className="bg-green-600 text-white rounded px-3 py-2 text-sm hover:bg-green-700">Log</button>
+        <input name="odometer" placeholder="Odometer" className="border p-1 rounded text-xs" required/>
+        <button className="border rounded px-2 py-1 text-xs hover:bg-gray-100">Log</button>
       </form>
 
       {/* Active Issues */}
