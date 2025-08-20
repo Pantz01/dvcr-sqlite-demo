@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders, getUser } from '@/lib/api'
-import { Truck, Wrench, FileText, Users as UsersIcon } from 'lucide-react'
 
 type UserRow = {
   id: number
@@ -33,11 +32,8 @@ function AdminInner() {
   const [users, setUsers] = useState<UserRow[]>([])
   const [busy, setBusy] = useState(false)
   const [pmAlertCount, setPmAlertCount] = useState<number>(0)
-
-  // Roles from backend (excluding 'admin'; we append admin manually)
   const [roles, setRoles] = useState<string[]>([])
 
-  // Row editing state + drafts
   const [editing, setEditing] = useState<Record<number, boolean>>({})
   const [draft, setDraft] = useState<Record<number, UserRow>>({})
 
@@ -46,7 +42,6 @@ function AdminInner() {
     if (!r.ok) { alert(await r.text().catch(()=> 'Failed to load users')); return }
     const data: UserRow[] = await r.json()
     setUsers(data)
-    // reset edit state on fresh load
     const e: Record<number, boolean> = {}
     const d: Record<number, UserRow> = {}
     data.forEach(u => { e[u.id] = false; d[u.id] = { ...u } })
@@ -119,7 +114,6 @@ function AdminInner() {
     if (!d) return
     setBusy(true)
     try {
-      // compute minimal patch
       const patch: Partial<UserRow> = {}
       if (d.name !== u.name) patch.name = d.name
       if (d.email !== u.email) patch.email = d.email
@@ -127,7 +121,6 @@ function AdminInner() {
       if (Object.keys(patch).length > 0) {
         await patchUser(u, patch)
       }
-      // refresh and exit edit mode
       await loadUsers()
       setEditing(prev => ({ ...prev, [u.id]: false }))
     } finally {
@@ -141,7 +134,7 @@ function AdminInner() {
   }
 
   function cancelEdit(u: UserRow) {
-    setDraft(prev => ({ ...prev, [u.id]: { ...u } })) // revert to server values
+    setDraft(prev => ({ ...prev, [u.id]: { ...u } }))
     setEditing(prev => ({ ...prev, [u.id]: false }))
   }
 
@@ -165,32 +158,23 @@ function AdminInner() {
     onClick,
     title,
     subtitle,
-    Icon,
     badge,
-    ariaLabel,
   }: {
     onClick: () => void
     title: string
     subtitle: string
-    Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
     badge?: number
-    ariaLabel?: string
   }) => (
     <button
       type="button"
       onClick={onClick}
-      aria-label={ariaLabel ?? title}
-      className="relative flex items-start gap-3 p-4 border rounded-2xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 text-left"
+      className="relative flex flex-col items-start p-4 border rounded-2xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 text-left"
     >
-      <Icon className="w-5 h-5 mt-0.5" aria-hidden="true" />
-      <div>
-        <div className="font-semibold">{title}</div>
-        <div className="text-sm text-gray-600">{subtitle}</div>
-      </div>
+      <div className="font-semibold">{title}</div>
+      <div className="text-sm text-gray-600">{subtitle}</div>
       {typeof badge === 'number' && badge > 0 && (
         <span
           className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white"
-          aria-label={`${badge} alerts`}
         >
           {badge}
         </span>
@@ -200,40 +184,33 @@ function AdminInner() {
 
   return (
     <main className="p-6 space-y-5">
-      {/* Header: no name/logout here (already handled by topbar) */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin Control Panel</h1>
-        {/* intentionally empty right side */}
         <div />
       </div>
 
-      {/* Primary buttons: Trucks and PM side-by-side first, then Reports, Users */}
+      {/* Primary buttons: Trucks + PM first, then Reports, Users */}
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
         <TileButton
           onClick={() => router.push('/admin/trucks')}
           title="Trucks"
           subtitle="Manage fleet & PM service"
-          Icon={Truck}
         />
         <TileButton
           onClick={() => router.push('/admin/pm')}
           title="PM Alerts & Scheduling"
           subtitle="See due-soon trucks and book shop dates"
-          Icon={Wrench}
           badge={pmAlertCount}
-          ariaLabel="Preventive maintenance alerts and scheduling"
         />
         <TileButton
           onClick={() => router.push('/reports')}
           title="Reports"
           subtitle="Browse & manage issues"
-          Icon={FileText}
         />
         <TileButton
           onClick={() => router.push('/users')}
           title="Users"
           subtitle="Create, edit, reset, delete"
-          Icon={UsersIcon}
         />
       </div>
 
