@@ -267,11 +267,10 @@ function AdminTrucksInner() {
         {/* Right: details & actions */}
         <div className="md:col-span-2 space-y-4">
           <div className="border rounded-2xl flex flex-col max-h-[75vh]">
-            {/* Sticky header */}
+            {/* Sticky header with export actions only */}
             <div className="p-3 font-semibold border-b flex items-center justify-between sticky top-0 bg-white z-10">
               <span>Details</span>
               <div className="flex gap-2">
-                {/* Compact export buttons */}
                 <button
                   className="px-2 py-1 text-xs border rounded-lg"
                   onClick={exportAlertsExcel}
@@ -279,46 +278,8 @@ function AdminTrucksInner() {
                 >
                   Export Alerts
                 </button>
-
                 <ExportAllIssuesButton />
-
-                {/* ✅ View Issues in header */}
-                {selected && (
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg"
-                    onClick={() => router.push(`/admin/trucks/${selected.id}`)}
-                    title="View issues for this truck"
-                  >
-                    View Issues
-                  </button>
-                )}
-
-                {selected && !isEditing && (
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg"
-                    onClick={() => setIsEditing(true)}
-                  >
-                    Edit
-                  </button>
-                )}
-                {selected && isEditing && (
-                  <>
-                    <button
-                      className="px-2 py-1 text-xs border rounded-lg"
-                      onClick={cancelEdits}
-                      disabled={busy}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="px-2 py-1 text-xs border rounded-lg bg-black text-white disabled:opacity-50"
-                      onClick={saveEdits}
-                      disabled={busy}
-                    >
-                      {busy ? 'Saving…' : 'Save'}
-                    </button>
-                  </>
-                )}
+                {/* ⛔ Moved View Issues + Edit controls out of header */}
               </div>
             </div>
 
@@ -370,7 +331,46 @@ function AdminTrucksInner() {
                     </Labeled>
                   </div>
 
-                  {/* PM snapshot with mobile-only View Issues */}
+                  {/* ⬇️ Button row moved LEFT, above PM Status */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selected && (
+                      <button
+                        className="px-2 py-1 text-xs border rounded-lg"
+                        onClick={() => router.push(`/admin/trucks/${selected.id}`)}
+                        title="View issues for this truck"
+                      >
+                        View Issues
+                      </button>
+                    )}
+
+                    {!isEditing ? (
+                      <button
+                        className="px-2 py-1 text-xs border rounded-lg"
+                        onClick={() => setIsEditing(true)}
+                      >
+                        Edit
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          className="px-2 py-1 text-xs border rounded-lg"
+                          onClick={cancelEdits}
+                          disabled={busy}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="px-2 py-1 text-xs border rounded-lg bg-black text-white disabled:opacity-50"
+                          onClick={saveEdits}
+                          disabled={busy}
+                        >
+                          {busy ? 'Saving…' : 'Save'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {/* PM snapshot */}
                   <div className="border rounded-2xl p-3">
                     <div className="font-semibold mb-2">PM Status</div>
                     {pm ? (
@@ -382,22 +382,9 @@ function AdminTrucksInner() {
                     ) : (
                       <div className="text-sm text-gray-500">—</div>
                     )}
-
-                    {/* Mobile-only View Issues button */}
-                    {selected && (
-                      <div className="mt-3 md:hidden">
-                        <button
-                          className="w-full inline-flex items-center justify-center px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
-                          onClick={() => router.push(`/admin/trucks/${selected.id}`)}
-                          aria-label="View issues for this truck"
-                        >
-                          View Issues
-                        </button>
-                      </div>
-                    )}
                   </div>
 
-                  {/* Add service */}
+                  {/* Add service — slimmed */}
                   <AddServiceCard
                     busy={busy}
                     onAdd={(svc, odo, notes) => selected && addService(selected, svc, odo, notes)}
@@ -466,11 +453,11 @@ function AddServiceCard({
   const [notes, setNotes] = useState('')
 
   return (
-    <div className="border rounded-2xl p-3 space-y-2">
-      <div className="font-semibold">Add Service</div>
-      <div className="grid sm:grid-cols-5 gap-2">
+    <div className="border rounded-2xl p-2 space-y-2">
+      <div className="text-sm font-semibold">Add Service</div>
+      <div className="grid sm:grid-cols-5 gap-1.5">
         <select
-          className="border p-2 rounded-xl"
+          className="border p-1.5 rounded-lg text-sm"
           value={svc}
           onChange={(e) => setSvc(e.target.value as 'oil' | 'chassis')}
         >
@@ -480,21 +467,21 @@ function AddServiceCard({
 
         <input
           type="number"
-          className="border p-2 rounded-xl"
+          className="border p-1.5 rounded-lg text-sm"
           placeholder="Odometer"
           value={odo}
           onChange={(e) => setOdo(parseInt(e.target.value || '0', 10))}
         />
 
         <input
-          className="border p-2 rounded-xl sm:col-span-2"
+          className="border p-1.5 rounded-lg text-sm sm:col-span-2"
           placeholder="Notes (optional)"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
         />
 
         <button
-          className="border rounded-xl p-2"
+          className="border rounded-lg px-2 py-1 text-xs"
           disabled={busy}
           onClick={() => onAdd(svc, odo, notes)}
         >
@@ -502,7 +489,7 @@ function AddServiceCard({
         </button>
       </div>
 
-      <p className="text-xs text-gray-600">
+      <p className="text-[11px] leading-tight text-gray-600">
         Tip: To change the “next due”, add a service at the odometer that represents the last completed service.
       </p>
     </div>
