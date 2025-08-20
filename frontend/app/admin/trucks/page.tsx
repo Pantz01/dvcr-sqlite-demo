@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import * as XLSX from 'xlsx' // ⬅️ keep
 
 // ---- date helper (M-D-YYYY, no leading zeros) ----
@@ -51,6 +51,8 @@ export default function AdminTrucksPage() {
 }
 
 function AdminTrucksInner() {
+  const router = useRouter()
+
   const [trucks, setTrucks] = useState<Truck[]>([])
   const [selected, setSelected] = useState<Truck | null>(null)
 
@@ -253,15 +255,7 @@ function AdminTrucksInner() {
                   </div>
                 </button>
 
-                {/* Per-row admin link */}
-                <div className="mt-2">
-                  <Link
-                    href={`/admin/trucks/${t.id}`}
-                    className="text-xs underline"
-                  >
-                    View Reports
-                  </Link>
-                </div>
+                {/* ⛔ Removed per-row 'View Reports' link */}
               </div>
             ))}
             {trucks.length === 0 && (
@@ -272,8 +266,9 @@ function AdminTrucksInner() {
 
         {/* Right: details & actions */}
         <div className="md:col-span-2 space-y-4">
-          <div className="border rounded-2xl">
-            <div className="p-3 font-semibold border-b flex items-center justify-between">
+          <div className="border rounded-2xl flex flex-col max-h-[75vh]">
+            {/* Sticky header */}
+            <div className="p-3 font-semibold border-b flex items-center justify-between sticky top-0 bg-white z-10">
               <span>Details</span>
               <div className="flex gap-2">
                 {/* Compact export buttons */}
@@ -286,6 +281,17 @@ function AdminTrucksInner() {
                 </button>
 
                 <ExportAllIssuesButton />
+
+                {/* ✅ View Issues in header */}
+                {selected && (
+                  <button
+                    className="px-2 py-1 text-xs border rounded-lg"
+                    onClick={() => router.push(`/admin/trucks/${selected.id}`)}
+                    title="View issues for this truck"
+                  >
+                    View Issues
+                  </button>
+                )}
 
                 {selected && !isEditing && (
                   <button
@@ -316,113 +322,122 @@ function AdminTrucksInner() {
               </div>
             </div>
 
-            {!selected ? (
-              <div className="p-4 text-sm text-gray-500">Select a truck on the left.</div>
-            ) : (
-              <div className="p-4 space-y-4">
-                <div className="grid sm:grid-cols-2 gap-3">
-                  <Labeled label="Truck Number">
-                    <input
-                      value={form?.number ?? ''}
-                      readOnly={!isEditing}
-                      onChange={(e) => setForm(f => f ? { ...f, number: e.target.value } : f)}
-                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
-                    />
-                  </Labeled>
+            {/* Scrollable body */}
+            <div className="p-4 space-y-4 overflow-auto">
+              {!selected ? (
+                <div className="text-sm text-gray-500">Select a truck on the left.</div>
+              ) : (
+                <>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <Labeled label="Truck Number">
+                      <input
+                        value={form?.number ?? ''}
+                        readOnly={!isEditing}
+                        onChange={(e) => setForm(f => f ? { ...f, number: e.target.value } : f)}
+                        className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
+                      />
+                    </Labeled>
 
-                  <Labeled label="VIN">
-                    <input
-                      value={form?.vin ?? ''}
-                      readOnly={!isEditing}
-                      onChange={(e) => setForm(f => f ? { ...f, vin: (e.target.value || null) as any } : f)}
-                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
-                    />
-                  </Labeled>
+                    <Labeled label="VIN">
+                      <input
+                        value={form?.vin ?? ''}
+                        readOnly={!isEditing}
+                        onChange={(e) => setForm(f => f ? { ...f, vin: (e.target.value || null) as any } : f)}
+                        className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
+                      />
+                    </Labeled>
 
-                  <Labeled label="Odometer">
-                    <input
-                      type="number"
-                      value={form?.odometer ?? 0}
-                      readOnly={!isEditing}
-                      onChange={(e) => setForm(f => f ? { ...f, odometer: parseInt(e.target.value || '0', 10) } : f)}
-                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
-                    />
-                  </Labeled>
+                    <Labeled label="Odometer">
+                      <input
+                        type="number"
+                        value={form?.odometer ?? 0}
+                        readOnly={!isEditing}
+                        onChange={(e) => setForm(f => f ? { ...f, odometer: parseInt(e.target.value || '0', 10) } : f)}
+                        className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
+                      />
+                    </Labeled>
 
-                  <Labeled label="Active">
-                    <select
-                      value={form?.active ? '1' : '0'}
-                      disabled={!isEditing}
-                      onChange={(e) => setForm(f => f ? { ...f, active: e.target.value === '1' } : f)}
-                      className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
-                    >
-                      <option value="1">Active</option>
-                      <option value="0">Inactive</option>
-                    </select>
-                  </Labeled>
-                </div>
+                    <Labeled label="Active">
+                      <select
+                        value={form?.active ? '1' : '0'}
+                        disabled={!isEditing}
+                        onChange={(e) => setForm(f => f ? { ...f, active: e.target.value === '1' } : f)}
+                        className={`border p-2 rounded-xl w-full ${!isEditing ? 'bg-gray-100' : ''}`}
+                      >
+                        <option value="1">Active</option>
+                        <option value="0">Inactive</option>
+                      </select>
+                    </Labeled>
+                  </div>
 
-                {/* PM snapshot */}
-                <div className="border rounded-2xl p-3">
-                  <div className="font-semibold mb-2">PM Status</div>
-                  {pm ? (
-                    <div className="grid sm:grid-cols-2 gap-2 text-sm">
-                      <div>Odometer: <b>{pm.odometer}</b></div>
-                      <div>Oil next due: <b>{pm.oil_next_due}</b> ({pm.oil_miles_remaining} mi left)</div>
-                      <div>Chassis next due: <b>{pm.chassis_next_due}</b> ({pm.chassis_miles_remaining} mi left)</div>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-gray-500">—</div>
-                  )}
-                </div>
+                  {/* PM snapshot with mobile-only View Issues */}
+                  <div className="border rounded-2xl p-3">
+                    <div className="font-semibold mb-2">PM Status</div>
+                    {pm ? (
+                      <div className="grid sm:grid-cols-2 gap-2 text-sm">
+                        <div>Odometer: <b>{pm.odometer}</b></div>
+                        <div>Oil next due: <b>{pm.oil_next_due}</b> ({pm.oil_miles_remaining} mi left)</div>
+                        <div>Chassis next due: <b>{pm.chassis_next_due}</b> ({pm.chassis_miles_remaining} mi left)</div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-500">—</div>
+                    )}
 
-                {/* Manage reports link (for the selected truck) */}
-                <div>
-                  <Link href={`/admin/trucks/${selected.id}`} className="underline">
-                    View Reports
-                  </Link>
-                </div>
-
-                {/* Add service */}
-                <AddServiceCard
-                  busy={busy}
-                  onAdd={(svc, odo, notes) => selected && addService(selected, svc, odo, notes)}
-                />
-
-                {/* Service history */}
-                <div className="border rounded-2xl overflow-hidden">
-                  <div className="p-3 font-semibold border-b">Service History</div>
-                  <div className="max-h-[40vh] overflow-auto divide-y">
-                    {services.map(s => (
-                      <div key={s.id} className="p-3 flex items-center gap-3">
-                        <div className="w-20 uppercase text-xs">{s.service_type}</div>
-                        <div className="flex-1 text-sm">
-                          Odo {s.odometer} · {formatDateMDY(s.created_at)}
-                          {s.notes ? <span className="text-gray-600"> · {s.notes}</span> : null}
-                        </div>
-                        <button className="text-xs underline text-red-600" onClick={() => deleteService(s.id)}>
-                          Delete
+                    {/* Mobile-only View Issues button */}
+                    {selected && (
+                      <div className="mt-3 md:hidden">
+                        <button
+                          className="w-full inline-flex items-center justify-center px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                          onClick={() => router.push(`/admin/trucks/${selected.id}`)}
+                          aria-label="View issues for this truck"
+                        >
+                          View Issues
                         </button>
                       </div>
-                    ))}
-                    {services.length === 0 && (
-                      <div className="p-3 text-sm text-gray-500">No services yet.</div>
                     )}
                   </div>
-                </div>
 
-                {/* Danger zone */}
-                <div className="border rounded-2xl p-3">
-                  <div className="font-semibold mb-2">Danger Zone</div>
-                  <button
-                    className="border border-red-600 text-red-600 rounded-xl px-3 py-2"
-                    onClick={() => selected && deleteTruck(selected)}
-                  >
-                    Delete Truck
-                  </button>
-                </div>
-              </div>
-            )}
+                  {/* Add service */}
+                  <AddServiceCard
+                    busy={busy}
+                    onAdd={(svc, odo, notes) => selected && addService(selected, svc, odo, notes)}
+                  />
+
+                  {/* Service history */}
+                  <div className="border rounded-2xl overflow-hidden">
+                    <div className="p-3 font-semibold border-b">Service History</div>
+                    <div className="max-h-[40vh] overflow-auto divide-y">
+                      {services.map(s => (
+                        <div key={s.id} className="p-3 flex items-center gap-3">
+                          <div className="w-20 uppercase text-xs">{s.service_type}</div>
+                          <div className="flex-1 text-sm">
+                            Odo {s.odometer} · {formatDateMDY(s.created_at)}
+                            {s.notes ? <span className="text-gray-600"> · {s.notes}</span> : null}
+                          </div>
+                          <button className="text-xs underline text-red-600" onClick={() => deleteService(s.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      ))}
+                      {services.length === 0 && (
+                        <div className="p-3 text-sm text-gray-500">No services yet.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Danger zone */}
+                  <div className="border rounded-2xl p-3">
+                    <div className="font-semibold mb-2">Danger Zone</div>
+                    <button
+                      className="border border-red-600 text-red-600 rounded-xl px-3 py-2"
+                      onClick={() => selected && deleteTruck(selected)}
+                    >
+                      Delete Truck
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
