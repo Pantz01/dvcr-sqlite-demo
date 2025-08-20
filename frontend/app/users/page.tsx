@@ -20,12 +20,8 @@ export default function UsersPage() {
     <RequireAuth>
       <RoleGuard roles={['manager', 'admin']}>
         <main className="p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold">User Management</h1>
-            <Link href="/admin/roles" className="border rounded-xl px-3 py-1.5">
-              Roles & Permissions
-            </Link>
-          </div>
+          {/* Title only — buttons rendered just below by UsersManager */}
+          <h1 className="text-2xl font-bold">User Management</h1>
 
           <UsersManager />
         </main>
@@ -60,7 +56,6 @@ function UsersManager() {
     try {
       const r = await fetch(`${API}/roles`, { headers: authHeaders() })
       if (!r.ok) {
-        // if managers can’t read roles on your server, this may 403—fallback to empty
         setRoles([])
         return
       }
@@ -151,13 +146,26 @@ function UsersManager() {
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-600">
-          {users.length} user{users.length === 1 ? '' : 's'}
-        </div>
-        <button className="border rounded-xl px-3 py-1.5" onClick={addUser} disabled={busy}>
+      {/* Buttons under the title, aligned left and side-by-side */}
+      <div className="flex items-center gap-2">
+        <Link
+          href="/admin/roles"
+          className="inline-flex items-center px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50"
+        >
+          Roles & Permissions
+        </Link>
+        <button
+          className="inline-flex items-center px-3 py-1.5 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-60"
+          onClick={addUser}
+          disabled={busy}
+        >
           + Add User
         </button>
+      </div>
+
+      {/* Optional: subtle meta line beneath buttons */}
+      <div className="text-sm text-gray-600">
+        {users.length} user{users.length === 1 ? '' : 's'}
       </div>
 
       {error && <div className="text-sm text-red-600">{error}</div>}
@@ -182,7 +190,6 @@ function UsersManager() {
                     {roles.map(r => (
                       <option key={r} value={r}>{r}</option>
                     ))}
-                    {/* fallback defaults if roles endpoint is empty */}
                     {roles.length === 0 && ['driver','mechanic','manager','admin'].map(r => (
                       <option key={r} value={r}>{r}</option>
                     ))}
@@ -190,17 +197,17 @@ function UsersManager() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button className="px-3 py-1.5 border rounded-xl" onClick={() => promptEditName(u)} disabled={busy}>
+                <button className="px-3 py-1.5 border rounded-md text-xs sm:text-sm" onClick={() => promptEditName(u)} disabled={busy}>
                   Edit Name
                 </button>
-                <button className="px-3 py-1.5 border rounded-xl" onClick={() => promptEditEmail(u)} disabled={busy}>
+                <button className="px-3 py-1.5 border rounded-md text-xs sm:text-sm" onClick={() => promptEditEmail(u)} disabled={busy}>
                   Edit Email
                 </button>
-                <button className="px-3 py-1.5 border rounded-xl" onClick={() => promptSetPassword(u)} disabled={busy}>
+                <button className="px-3 py-1.5 border rounded-md text-xs sm:text-sm" onClick={() => promptSetPassword(u)} disabled={busy}>
                   Set Password
                 </button>
                 <button
-                  className="px-3 py-1.5 border rounded-xl border-red-600 text-red-600"
+                  className="px-3 py-1.5 border rounded-md text-xs sm:text-sm border-red-600 text-red-600"
                   onClick={() => deleteUser(u)}
                   disabled={busy}
                 >
