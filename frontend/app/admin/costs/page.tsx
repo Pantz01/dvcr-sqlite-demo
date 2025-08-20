@@ -6,7 +6,6 @@ import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders } from '@/lib/api'
 import * as XLSX from 'xlsx'
-import { Upload, Save, Trash2, Download } from 'lucide-react'
 
 type Truck = {
   id: number
@@ -40,7 +39,6 @@ function CostsInner() {
 
   // Map truckNumber -> cost
   const [ytdByTruckNo, setYtdByTruckNo] = useState<Record<string, number>>({})
-  // Any rows in the upload we couldn't match to an existing truck number
   const [unmatched, setUnmatched] = useState<ParsedRow[]>([])
 
   // Load trucks
@@ -99,6 +97,7 @@ function CostsInner() {
     setLoading(true)
     setError(null)
     try {
+      // Try ArrayBuffer path (XLSX/XLS/CSV)
       const buf = await f.arrayBuffer()
       const wb = XLSX.read(buf, { type: 'array' })
       const ws = wb.Sheets[wb.SheetNames[0]]
@@ -107,14 +106,14 @@ function CostsInner() {
       const parsed: ParsedRow[] = []
       for (const row of rows) {
         const truckNumber = pickTruckNumber(row)
-        const ytdCost = pickCost(row)
-        if (truckNumber && Number.isFinite(ytdCost)) {
-          parsed.push({ truckNumber, ytdCost })
+        const y = pickCost(row)
+        if (truckNumber != null && y != null && Number.isFinite(y)) {
+          parsed.push({ truckNumber, ytdCost: y })
         }
       }
 
+      // Fallback: CSV-as-text (some CSVs parse better via string path)
       if (parsed.length === 0) {
-        // Try CSV-as-text (some CSVs read better via text path)
         const text = await f.text().catch(() => '')
         if (text) {
           const wb2 = XLSX.read(text, { type: 'string' })
@@ -122,9 +121,9 @@ function CostsInner() {
           const rows2 = XLSX.utils.sheet_to_json<Record<string, any>>(ws2, { defval: '' })
           for (const row of rows2) {
             const truckNumber = pickTruckNumber(row)
-            const ytdCost = pickCost(row)
-            if (truckNumber && Number.isFinite(ytdCost)) {
-              parsed.push({ truckNumber, ytdCost })
+            const y = pickCost(row)
+            if (truckNumber != null && y != null && Number.isFinite(y)) {
+              parsed.push({ truckNumber, ytdCost: y })
             }
           }
         }
@@ -208,9 +207,8 @@ function CostsInner() {
   }
 
   const rowsForDisplay = useMemo(() => {
-    // show all trucks; if a truck has no cost, display 0 or empty?
-    // We'll show blank for clarity.
-    const arr = trucks
+    // show all trucks; if a truck has no cost, show blank
+    return trucks
       .slice()
       .sort((a, b) => a.number.localeCompare(b.number))
       .map(t => ({
@@ -218,7 +216,6 @@ function CostsInner() {
         number: t.number,
         cost: ytdByTruckNo[t.number],
       }))
-    return arr
   }, [trucks, ytdByTruckNo])
 
   return (
@@ -227,28 +224,28 @@ function CostsInner() {
         <h1 className="text-xl font-semibold">Maintenance Cost Tracker (YTD)</h1>
         <div className="flex items-center gap-2">
           <button
-            className="px-2.5 py-1 text-[11px] border rounded-md inline-flex items-center gap-1"
+            className="px-2.5 py-1 text-[11px] border rounded-md"
             onClick={exportNormalizedCsv}
             title="Download a normalized CSV of the current YTD table"
           >
-            <Download size={14} /> Export CSV
+            Export CSV
           </button>
           <button
-            className="px-2.5 py-1 text-[11px] border rounded-md inline-flex items-center gap-1"
+            className="px-2.5 py-1 text-[11px] border rounded-md"
             onClick={saveLocal}
             title="Save to this browser"
           >
-            <Save size={14} /> Save
+            Save
           </button>
           <button
-            className="px-2.5 py-1 text-[11px] border rounded-md inline-flex items-center gap-1"
+            className="px-2.5 py-1 text-[11px] border rounded-md"
             onClick={clearLocal}
             title="Clear saved YTD costs"
           >
-            <Trash2 size={14} /> Clear
+            Clear
           </button>
           <button
-            className="px-2.5 py-1 text-[11px] border rounded-md inline-flex items-center gap-1"
+            className="px-2.5 py-1 text-[11px] border rounded-md"
             onClick={trySyncToServer}
             title="Try to POST to /costs/bulk-ytd"
           >
@@ -262,7 +259,6 @@ function CostsInner() {
         <div className="flex items-center justify-between">
           <div className="font-medium text-sm">Upload YTD Spreadsheet</div>
           <label className="cursor-pointer inline-flex items-center gap-2 text-[12px] border rounded-md px-2.5 py-1">
-            <Upload size={14} />
             <span>Choose file</span>
             <input
               type="file"
@@ -381,7 +377,6 @@ function fmtMoney(n: number) {
 // heuristics to find the truck-number column
 function pickTruckNumber(row: Record<string, any>): string | null {
   const keys = Object.keys(row)
-  // prefer exact-ish names first
   const candidates = [
     'truck number', 'truck', 'number', 'unit', 'vehicle', 'truck_no', 'trucknum', 'unit number'
   ]
