@@ -60,8 +60,7 @@ type FlatIssue = {
   description: string
   resolved: boolean
   resolved_at?: string | null
-  component?: string | null
-  severity?: string | null
+  // component/severity intentionally omitted from UI per request
   notes: Note[]
 }
 
@@ -86,8 +85,8 @@ function ReportsInner() {
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
 
-  // expanded rows
-  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+  // Which issues have their NOTES visible
+  const [openNoteKeys, setOpenNoteKeys] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     const qId = searchParams?.get('truckId')
@@ -161,8 +160,6 @@ function ReportsInner() {
             description: d.description || '',
             resolved: !!d.resolved,
             resolved_at: d.resolved_at,
-            component: d.component,
-            severity: d.severity,
             notes,
           })
         }
@@ -171,27 +168,24 @@ function ReportsInner() {
       // newest first by report date
       flat.sort((a, b) => new Date(b.reportDate).getTime() - new Date(a.reportDate).getTime())
       setIssues(flat)
-      setExpandedKeys(new Set()) // collapse on reload
+      setOpenNoteKeys(new Set()) // collapse notes on reload
     } catch (e: any) {
       setError(e?.message ?? 'Failed to load issues')
       setIssues([])
-      setExpandedKeys(new Set())
+      setOpenNoteKeys(new Set())
     } finally {
       setBusy(false)
     }
   }
 
-  // Search over description, notes, and metadata
+  // Search over description and notes
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return issues
     return issues.filter(it => {
       const inDesc = (it.description || '').toLowerCase().includes(q)
       const inNotes = it.notes.some(n => (n.text || '').toLowerCase().includes(q))
-      const inMeta =
-        (it.component || '').toLowerCase().includes(q) ||
-        (it.severity || '').toLowerCase().includes(q)
-      return inDesc || inNotes || inMeta
+      return inDesc || inNotes
     })
   }, [issues, query])
 
@@ -200,8 +194,8 @@ function ReportsInner() {
 
   const selectedTruck = trucks.find(t => t.id === truckId) || null
 
-  function toggleExpanded(key: string) {
-    setExpandedKeys(prev => {
+  function toggleNotes(key: string) {
+    setOpenNoteKeys(prev => {
       const next = new Set(prev)
       if (next.has(key)) next.delete(key)
       else next.add(key)
@@ -250,9 +244,9 @@ function ReportsInner() {
   }
 
   return (
-    <main className="p-6 space-y-6">
+    <main className="p-6 space-y-5">
       <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Reports</h1>
+        <h1 className="text-xl font-semibold">Reports</h1>
         <div className="flex items-center gap-2">
           <ExportAllIssuesButton />
           <ExportTruckIssuesButton truckId={truckId} truckNumber={selectedTruck?.number ?? null} />
@@ -260,11 +254,11 @@ function ReportsInner() {
       </div>
 
       {/* Controls (Truck + Search) */}
-      <div className="border rounded-2xl p-4 grid md:grid-cols-3 gap-3 items-end">
-        <label className="grid gap-1 text-sm md:col-span-1">
+      <div className="border rounded-xl p-3 grid md:grid-cols-3 gap-2 items-end">
+        <label className="grid gap-1 text-xs md:col-span-1">
           <span className="text-gray-600">Truck</span>
           <select
-            className="border p-2 rounded-xl"
+            className="border p-1.5 rounded-lg text-sm"
             value={truckId ?? ''}
             onChange={(e) => setTruckId(Number(e.target.value) || null)}
           >
@@ -276,21 +270,21 @@ function ReportsInner() {
           </select>
         </label>
 
-        <label className="grid gap-1 text-sm md:col-span-2">
+        <label className="grid gap-1 text-xs md:col-span-2">
           <span className="text-gray-600">Search</span>
           <input
-            className="border p-2 rounded-xl"
-            placeholder="Search issues and notes (e.g., 'brake', 'leak', 'left marker')"
+            className="border p-1.5 rounded-lg text-sm"
+            placeholder="Search issues and notes (e.g., 'brake', 'leak', 'marker')"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
       </div>
 
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {error && <div className="text-xs text-red-600">{error}</div>}
 
       {/* Summary */}
-      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-700">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-gray-700">
         <span>Total issues: <b>{filtered.length}</b></span>
         <span className="opacity-60">•</span>
         <span>Unresolved: <b>{unresolved.length}</b></span>
@@ -299,13 +293,13 @@ function ReportsInner() {
         {busy && <span className="opacity-60">• Loading…</span>}
       </div>
 
-      {/* Issues lists (accordion style) */}
+      {/* Issues lists */}
       <div className="grid lg:grid-cols-2 gap-4">
         <IssuesList
           title="Unresolved Issues"
           rows={unresolved}
-          expandedKeys={expandedKeys}
-          onToggle={toggleExpanded}
+          openNoteKeys={openNoteKeys}
+          onToggleNotes={toggleNotes}
           onEditIssue={editIssue}
           onDeleteIssue={deleteIssue}
           onEditNote={editNote}
@@ -314,8 +308,8 @@ function ReportsInner() {
         <IssuesList
           title="Resolved Issues"
           rows={resolved}
-          expandedKeys={expandedKeys}
-          onToggle={toggleExpanded}
+          openNoteKeys={openNoteKeys}
+          onToggleNotes={toggleNotes}
           onEditIssue={editIssue}
           onDeleteIssue={deleteIssue}
           onEditNote={editNote}
@@ -342,8 +336,8 @@ async function fetchJsonOk(url: string, init?: RequestInit) {
 function IssuesList({
   title,
   rows,
-  expandedKeys,
-  onToggle,
+  openNoteKeys,
+  onToggleNotes,
   onEditIssue,
   onDeleteIssue,
   onEditNote,
@@ -351,26 +345,26 @@ function IssuesList({
 }: {
   title: string
   rows: FlatIssue[]
-  expandedKeys: Set<string>
-  onToggle: (k: string) => void
+  openNoteKeys: Set<string>
+  onToggleNotes: (k: string) => void
   onEditIssue: (defectId: number, patch: Partial<Defect>) => Promise<void>
   onDeleteIssue: (defectId: number) => Promise<void>
   onEditNote: (noteId: number, patch: Partial<Pick<Note, 'text'>>) => Promise<void>
   onDeleteNote: (noteId: number) => Promise<void>
 }) {
   return (
-    <div className="border rounded-2xl overflow-hidden">
-      <div className="p-3 font-semibold border-b">{title}</div>
+    <div className="border rounded-xl overflow-hidden">
+      <div className="px-3 py-2 font-semibold border-b text-sm">{title}</div>
       {rows.length === 0 ? (
-        <div className="p-3 text-sm text-gray-500">No issues.</div>
+        <div className="p-3 text-xs text-gray-500">No issues.</div>
       ) : (
         <div className="divide-y">
           {rows.map(i => (
             <IssueRow
               key={i.key}
               issue={i}
-              expanded={expandedKeys.has(i.key)}
-              onToggle={() => onToggle(i.key)}
+              notesOpen={openNoteKeys.has(i.key)}
+              onToggleNotes={() => onToggleNotes(i.key)}
               onEditIssue={onEditIssue}
               onDeleteIssue={onDeleteIssue}
               onEditNote={onEditNote}
@@ -385,16 +379,16 @@ function IssuesList({
 
 function IssueRow({
   issue,
-  expanded,
-  onToggle,
+  notesOpen,
+  onToggleNotes,
   onEditIssue,
   onDeleteIssue,
   onEditNote,
   onDeleteNote,
 }: {
   issue: FlatIssue
-  expanded: boolean
-  onToggle: () => void
+  notesOpen: boolean
+  onToggleNotes: () => void
   onEditIssue: (defectId: number, patch: Partial<Defect>) => Promise<void>
   onDeleteIssue: (defectId: number) => Promise<void>
   onEditNote: (noteId: number, patch: Partial<Pick<Note, 'text'>>) => Promise<void>
@@ -429,7 +423,7 @@ function IssueRow({
   async function toggleResolved() {
     try {
       setToggling(true)
-      await onEditIssue(issue.defectId, { resolved: !issue.resolved }) // server should manage resolved_at
+      await onEditIssue(issue.defectId, { resolved: !issue.resolved })
     } catch (e: any) {
       alert(e?.message ?? 'Failed to update status')
     } finally {
@@ -437,179 +431,168 @@ function IssueRow({
     }
   }
 
-  function badge(label: string) {
-    return <span className="inline-block px-1.5 py-0.5 text-[11px] rounded border">{label}</span>
-  }
-
   return (
-    <div className="p-3 text-sm">
-      {/* Header row (click to expand) */}
-      <button
-        className="w-full text-left"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-controls={`issue-${issue.key}`}
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="font-medium truncate">
-            {issue.description || '(no description)'}
-          </div>
-          <span className="opacity-60">•</span>
-          <div className="text-gray-600">Date: {formatDateMDY(issue.reportDate)}</div>
-          {issue.component ? badge(issue.component) : null}
-          {issue.severity ? badge(issue.severity) : null}
+    <div className="p-2 text-sm">
+      {/* Single compact row */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+          <span>Date: {formatDateMDY(issue.reportDate)}</span>
           {issue.resolved && issue.resolved_at ? (
             <>
               <span className="opacity-60">•</span>
-              <div className="text-gray-600">Resolved: {formatDateMDY(issue.resolved_at)}</div>
+              <span>Resolved: {formatDateMDY(issue.resolved_at)}</span>
             </>
           ) : null}
         </div>
-      </button>
 
-      {/* Expanded body (edit/delete/resolve only visible when expanded) */}
-      {expanded && (
-        <div id={`issue-${issue.key}`} className="mt-3 space-y-3">
-          {/* Issue editor + actions */}
-          <div className="flex flex-col gap-2">
-            <label className="text-xs text-gray-600">Issue</label>
-            <div className="flex items-center gap-2">
-              <input
-                className="border rounded-lg px-2 py-1.5 flex-1"
-                value={issueText}
-                onChange={(e) => setIssueText(e.target.value)}
-                readOnly={!editingIssue}
-              />
-              {!editingIssue ? (
-                <>
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg"
-                    onClick={() => setEditingIssue(true)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg"
-                    onClick={toggleResolved}
-                    disabled={toggling}
-                    title={issue.resolved ? 'Reopen issue' : 'Mark as resolved'}
-                  >
-                    {toggling ? 'Working…' : issue.resolved ? 'Reopen' : 'Resolve'}
-                  </button>
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg border-red-600 text-red-600"
-                    onClick={() => onDeleteIssue(issue.defectId)}
-                  >
-                    Delete
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg"
-                    onClick={() => { setEditingIssue(false); setIssueText(issue.description) }}
-                    disabled={savingIssue}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="px-2 py-1 text-xs border rounded-lg bg-black text-white disabled:opacity-50"
-                    onClick={saveIssue}
-                    disabled={savingIssue}
-                  >
-                    {savingIssue ? 'Saving…' : 'Save'}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
+        <div className="flex items-center gap-2">
+          <input
+            className={`border rounded-md px-2 py-1 flex-1 text-sm ${!editingIssue ? 'bg-gray-100 text-gray-800 cursor-not-allowed' : ''}`}
+            value={issueText}
+            onChange={(e) => setIssueText(e.target.value)}
+            readOnly={!editingIssue}
+          />
+          {!editingIssue ? (
+            <>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                onClick={() => setEditingIssue(true)}
+                title="Edit issue"
+              >
+                Edit
+              </button>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                onClick={toggleResolved}
+                disabled={toggling}
+                title={issue.resolved ? 'Reopen issue' : 'Resolve issue'}
+              >
+                {toggling ? '…' : issue.resolved ? 'Reopen' : 'Resolve'}
+              </button>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md border-red-600 text-red-600"
+                onClick={() => onDeleteIssue(issue.defectId)}
+                title="Delete issue"
+              >
+                Delete
+              </button>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                onClick={onToggleNotes}
+                title={notesOpen ? 'Hide notes' : 'Show notes'}
+              >
+                {notesOpen ? 'Hide notes' : 'Show notes'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                onClick={() => { setEditingIssue(false); setIssueText(issue.description) }}
+                disabled={savingIssue}
+                title="Cancel"
+              >
+                Cancel
+              </button>
+              <button
+                className="px-1.5 py-0.5 text-[11px] border rounded-md bg-black text-white disabled:opacity-50"
+                onClick={saveIssue}
+                disabled={savingIssue}
+                title="Save"
+              >
+                {savingIssue ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
 
-          {/* Notes list (each with edit/delete) */}
-          <div className="space-y-2">
-            <div className="text-xs text-gray-600">Notes</div>
-            {issue.notes.length === 0 ? (
-              <div className="text-xs text-gray-500">No notes.</div>
-            ) : (
-              issue.notes.map(n => {
-                const isEditing = !!noteEditing[n.id]
-                const val = isEditing ? (noteEdits[n.id] ?? n.text) : n.text
-                return (
-                  <div key={n.id} className="border rounded-lg p-2">
-                    <div className="text-[11px] text-gray-600 mb-1">
-                      {formatDateMDY(n.created_at)}
-                      {n.author?.name ? ` · ${n.author.name}` : ''}
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <textarea
-                        className="border rounded-lg p-1.5 text-sm flex-1 min-h-[40px]"
-                        value={val}
-                        readOnly={!isEditing}
-                        onChange={(e) =>
-                          setNoteEdits(prev => ({ ...prev, [n.id]: e.target.value }))
-                        }
-                      />
-                      {!isEditing ? (
-                        <div className="flex flex-col gap-1">
-                          <button
-                            className="px-2 py-1 text-xs border rounded-lg"
-                            onClick={() => {
-                              setNoteEditing(prev => ({ ...prev, [n.id]: true }))
-                              setNoteEdits(prev => ({ ...prev, [n.id]: n.text }))
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="px-2 py-1 text-xs border rounded-lg border-red-600 text-red-600"
-                            onClick={() => onDeleteNote(n.id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          <button
-                            className="px-2 py-1 text-xs border rounded-lg"
-                            disabled={!!noteSaving[n.id]}
-                            onClick={() => {
+      {/* Notes (only when toggled) */}
+      {notesOpen && (
+        <div className="mt-2 space-y-2">
+          {issue.notes.length === 0 ? (
+            <div className="text-xs text-gray-500">No notes.</div>
+          ) : (
+            issue.notes.map(n => {
+              const isEditing = !!noteEditing[n.id]
+              const val = isEditing ? (noteEdits[n.id] ?? n.text) : n.text
+              return (
+                <div key={n.id} className="border rounded-md p-2">
+                  <div className="text-[11px] text-gray-600 mb-1">
+                    {formatDateMDY(n.created_at)}{n.author?.name ? ` · ${n.author.name}` : ''}
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      className={`border rounded-md p-1.5 text-sm flex-1 min-h-[36px] ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      value={val}
+                      readOnly={!isEditing}
+                      onChange={(e) => setNoteEdits(prev => ({ ...prev, [n.id]: e.target.value }))}
+                    />
+                    {!isEditing ? (
+                      <div className="flex flex-col gap-1">
+                        <button
+                          className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                          onClick={() => {
+                            setNoteEditing(prev => ({ ...prev, [n.id]: true }))
+                            setNoteEdits(prev => ({ ...prev, [n.id]: n.text }))
+                          }}
+                          title="Edit note"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="px-1.5 py-0.5 text-[11px] border rounded-md border-red-600 text-red-600"
+                          onClick={() => onDeleteNote(n.id)}
+                          title="Delete note"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-1">
+                        <button
+                          className="px-1.5 py-0.5 text-[11px] border rounded-md"
+                          disabled={!!noteSaving[n.id]}
+                          onClick={() => {
+                            setNoteEditing(prev => ({ ...prev, [n.id]: false }))
+                            setNoteEdits(prev => {
+                              const { [n.id]: _, ...rest } = prev
+                              return rest
+                            })
+                          }}
+                          title="Cancel"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="px-1.5 py-0.5 text-[11px] border rounded-md bg-black text-white disabled:opacity-50"
+                          disabled={!!noteSaving[n.id]}
+                          onClick={async () => {
+                            try {
+                              setNoteSaving(prev => ({ ...prev, [n.id]: true }))
+                              await onEditNote(n.id, { text: noteEdits[n.id] ?? n.text })
                               setNoteEditing(prev => ({ ...prev, [n.id]: false }))
                               setNoteEdits(prev => {
                                 const { [n.id]: _, ...rest } = prev
                                 return rest
                               })
-                            }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            className="px-2 py-1 text-xs border rounded-lg bg-black text-white disabled:opacity-50"
-                            disabled={!!noteSaving[n.id]}
-                            onClick={async () => {
-                              try {
-                                setNoteSaving(prev => ({ ...prev, [n.id]: true }))
-                                await onEditNote(n.id, { text: noteEdits[n.id] ?? n.text })
-                                setNoteEditing(prev => ({ ...prev, [n.id]: false }))
-                                setNoteEdits(prev => {
-                                  const { [n.id]: _, ...rest } = prev
-                                  return rest
-                                })
-                              } catch (e: any) {
-                                alert(e?.message ?? 'Failed to save note')
-                              } finally {
-                                setNoteSaving(prev => ({ ...prev, [n.id]: false }))
-                              }
-                            }}
-                          >
-                            {noteSaving[n.id] ? 'Saving…' : 'Save'}
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                            } catch (e: any) {
+                              alert(e?.message ?? 'Failed to save note')
+                            } finally {
+                              setNoteSaving(prev => ({ ...prev, [n.id]: false }))
+                            }
+                          }}
+                          title="Save"
+                        >
+                          {noteSaving[n.id] ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )
-              })
-            )}
-          </div>
+                </div>
+              )
+            })
+          )}
         </div>
       )}
     </div>
@@ -715,7 +698,7 @@ function ExportAllIssuesButton() {
     <button
       onClick={exportAllIssuesCsv}
       disabled={busy}
-      className="px-2.5 py-1 text-xs border rounded-md disabled:opacity-50"
+      className="px-2.5 py-1 text-[11px] border rounded-md disabled:opacity-50"
       title="Export all issues for all trucks"
     >
       {busy ? 'Exporting…' : 'Export All Issues'}
@@ -736,11 +719,10 @@ function ExportTruckIssuesButton({
 }) {
   const [busy, setBusy] = useState(false)
 
-  // If no truck selected, render disabled button; otherwise narrow to number
   if (truckId == null) {
     return (
       <button
-        className="px-2.5 py-1 text-xs border rounded-md opacity-50 cursor-not-allowed"
+        className="px-2.5 py-1 text-[11px] border rounded-md opacity-50 cursor-not-allowed"
         disabled
         title="Select a truck to export"
       >
@@ -749,7 +731,7 @@ function ExportTruckIssuesButton({
     )
   }
 
-  const id: number = truckId // narrowed by the guard above
+  const id: number = truckId // narrowed by guard
 
   async function fetchWithHeaders(url: string) {
     const r = await fetch(url, { headers: authHeaders() })
@@ -837,7 +819,7 @@ function ExportTruckIssuesButton({
     <button
       onClick={() => exportTruckCsv(id)}
       disabled={busy}
-      className="px-2.5 py-1 text-xs border rounded-md disabled:opacity-50"
+      className="px-2.5 py-1 text-[11px] border rounded-md disabled:opacity-50"
       title="Export issues for the selected truck"
     >
       {busy ? 'Exporting…' : 'Export This Truck'}
