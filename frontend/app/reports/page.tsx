@@ -79,7 +79,6 @@ function ReportsInner() {
   const searchParams = useSearchParams()
 
   const [trucks, setTrucks] = useState<Truck[]>([])
-  the
   const [truckId, setTruckId] = useState<number | null>(null)
 
   const [issues, setIssues] = useState<FlatIssue[]>([])
