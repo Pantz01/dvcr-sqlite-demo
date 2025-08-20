@@ -79,6 +79,7 @@ function ReportsInner() {
   const searchParams = useSearchParams()
 
   const [trucks, setTrucks] = useState<Truck[]>([])
+  the
   const [truckId, setTruckId] = useState<number | null>(null)
 
   const [issues, setIssues] = useState<FlatIssue[]>([])
@@ -736,7 +737,7 @@ function ExportTruckIssuesButton({
 }) {
   const [busy, setBusy] = useState(false)
 
-  // If no truck selected, render disabled button (narrows type for TS)
+  // If no truck selected, render disabled button; otherwise narrow to number
   if (truckId == null) {
     return (
       <button
@@ -749,6 +750,8 @@ function ExportTruckIssuesButton({
     )
   }
 
+  const id: number = truckId // narrowed by the guard above
+
   async function fetchWithHeaders(url: string) {
     const r = await fetch(url, { headers: authHeaders() })
     if (!r.ok) throw new Error(await r.text().catch(() => 'Request failed'))
@@ -757,7 +760,7 @@ function ExportTruckIssuesButton({
     return { data, total }
   }
 
-  async function fetchAllReportsForTruck(id: number) {
+  async function fetchAllReportsForTruck(idNum: number) {
     const all: any[] = []
     const limit = 500
     let skip = 0
@@ -765,7 +768,7 @@ function ExportTruckIssuesButton({
 
     while (skip < total) {
       const { data, total: t } = await fetchWithHeaders(
-        `${API}/trucks/${id}/reports?skip=${skip}&limit=${limit}`
+        `${API}/trucks/${idNum}/reports?skip=${skip}&limit=${limit}`
       )
       total = isFinite(t) && t > 0 ? t : data.length
       all.push(...data)
@@ -792,11 +795,10 @@ function ExportTruckIssuesButton({
     return lines.join('\n')
   }
 
-  async function exportTruckCsv() {
+  async function exportTruckCsv(idNum: number) {
     try {
       setBusy(true)
-      const id = truckId // narrowed by the guard above
-      const reports = await fetchAllReportsForTruck(id)
+      const reports = await fetchAllReportsForTruck(idNum)
       const rows: Record<string, any>[] = []
       for (const r of reports) {
         const createdAt = r?.created_at
@@ -808,7 +810,7 @@ function ExportTruckIssuesButton({
             ? (d?.resolved_at ? formatDateMDY(d.resolved_at) : '')
             : 'Unresolved'
           rows.push({
-            'Truck': truckNumber ?? id,
+            'Truck': truckNumber ?? idNum,
             'Date of Issue': issueDate,
             'Issue': issueText,
             'Date Resolved / Status': resolvedDate,
@@ -821,7 +823,7 @@ function ExportTruckIssuesButton({
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       const ts = formatDateMDY(new Date())
-      const safeNo = (truckNumber || `truck-${id}`).replace(/[^\w-]+/g, '_')
+      const safeNo = (truckNumber || `truck-${idNum}`).replace(/[^\w-]+/g, '_')
       a.download = `${safeNo}-issues-${ts}.csv`
       a.click()
       URL.revokeObjectURL(a.href)
@@ -834,7 +836,7 @@ function ExportTruckIssuesButton({
 
   return (
     <button
-      onClick={exportTruckCsv}
+      onClick={() => exportTruckCsv(id)}
       disabled={busy}
       className="px-2.5 py-1 text-xs border rounded-md disabled:opacity-50"
       title="Export issues for the selected truck"
