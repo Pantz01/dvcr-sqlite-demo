@@ -255,7 +255,7 @@ function ReportsInner() {
         <h1 className="text-2xl font-bold">Reports</h1>
         <div className="flex items-center gap-2">
           <ExportAllIssuesButton />
-          <ExportTruckIssuesButton truckId={truckId} truckNumber={selectedTruck?.number} />
+          <ExportTruckIssuesButton truckId={truckId} truckNumber={selectedTruck?.number ?? null} />
         </div>
       </div>
 
@@ -724,13 +724,20 @@ function ExportAllIssuesButton() {
 }
 
 /* =======================
-   Export (Selected Truck)
+   Export (Selected Truck) – TS-safe
    ======================= */
 
-function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | null, truckNumber?: string | null }) {
+function ExportTruckIssuesButton({
+  truckId,
+  truckNumber,
+}: {
+  truckId: number | null
+  truckNumber?: string | null
+}) {
   const [busy, setBusy] = useState(false)
 
-  if (!truckId) {
+  // If no truck selected, render disabled button (narrows type for TS)
+  if (truckId == null) {
     return (
       <button
         className="px-2.5 py-1 text-xs border rounded-md opacity-50 cursor-not-allowed"
@@ -750,7 +757,7 @@ function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | n
     return { data, total }
   }
 
-  async function fetchAllReportsForTruck(truckId: number) {
+  async function fetchAllReportsForTruck(id: number) {
     const all: any[] = []
     const limit = 500
     let skip = 0
@@ -758,7 +765,7 @@ function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | n
 
     while (skip < total) {
       const { data, total: t } = await fetchWithHeaders(
-        `${API}/trucks/${truckId}/reports?skip=${skip}&limit=${limit}`
+        `${API}/trucks/${id}/reports?skip=${skip}&limit=${limit}`
       )
       total = isFinite(t) && t > 0 ? t : data.length
       all.push(...data)
@@ -788,7 +795,8 @@ function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | n
   async function exportTruckCsv() {
     try {
       setBusy(true)
-      const reports = await fetchAllReportsForTruck(truckId)
+      const id = truckId // narrowed by the guard above
+      const reports = await fetchAllReportsForTruck(id)
       const rows: Record<string, any>[] = []
       for (const r of reports) {
         const createdAt = r?.created_at
@@ -800,7 +808,7 @@ function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | n
             ? (d?.resolved_at ? formatDateMDY(d.resolved_at) : '')
             : 'Unresolved'
           rows.push({
-            'Truck': truckNumber ?? truckId,
+            'Truck': truckNumber ?? id,
             'Date of Issue': issueDate,
             'Issue': issueText,
             'Date Resolved / Status': resolvedDate,
@@ -813,7 +821,7 @@ function ExportTruckIssuesButton({ truckId, truckNumber }: { truckId: number | n
       const a = document.createElement('a')
       a.href = URL.createObjectURL(blob)
       const ts = formatDateMDY(new Date())
-      const safeNo = (truckNumber || `truck-${truckId}`).replace(/[^\w-]+/g, '_')
+      const safeNo = (truckNumber || `truck-${id}`).replace(/[^\w-]+/g, '_')
       a.download = `${safeNo}-issues-${ts}.csv`
       a.click()
       URL.revokeObjectURL(a.href)
