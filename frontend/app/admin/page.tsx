@@ -159,13 +159,25 @@ function AdminInner() {
   const roleOptions = [...roles, 'admin']
 
   return (
-    <main className="p-6 space-y-6">
+    <main className="p-6 space-y-5">
+      {/* Header: keep name + logout in upper-right, no 'Signed in as' text */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin Control Panel</h1>
-        <div className="text-sm text-gray-600">Signed in as {me?.name} ({me?.role})</div>
+        <div className="flex items-center gap-3 text-sm text-gray-700">
+          <span className="font-medium">{me?.name}</span>
+          <span className="text-gray-400">•</span>
+          <Link
+            href="/logout"
+            className="inline-flex items-center px-3 py-1.5 border rounded-md hover:bg-gray-50"
+            aria-label="Log out"
+          >
+            Log out
+          </Link>
+        </div>
       </div>
 
-      <div className="grid md:grid-cols-3 gap-4">
+      {/* Primary cards */}
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
         <Link href="/admin/trucks" className="p-4 border rounded-2xl hover:bg-gray-50">
           <div className="font-semibold">Trucks</div>
           <div className="text-sm text-gray-600">Manage fleet & PM service</div>
@@ -180,7 +192,10 @@ function AdminInner() {
           <div className="font-semibold">PM Alerts & Scheduling</div>
           <div className="text-sm text-gray-600">See due-soon trucks and book shop dates</div>
           {pmAlertCount > 0 && (
-            <span className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white">
+            <span
+              className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white"
+              aria-label={`${pmAlertCount} PM alerts`}
+            >
               {pmAlertCount}
             </span>
           )}
@@ -206,11 +221,17 @@ function AdminInner() {
             <option value="admin">admin</option>
           </select>
           <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl" />
-          <button disabled={busy} className="border rounded-xl p-2">{busy ? 'Adding…' : 'Add'}</button>
+          {/* smaller, tidy button */}
+          <button
+            disabled={busy}
+            className="inline-flex items-center justify-center px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-60"
+          >
+            {busy ? 'Adding…' : 'Add'}
+          </button>
         </form>
       </section>
 
-      {/* Users Table (locked until Edit) */}
+      {/* Users Table */}
       <section className="border rounded-2xl p-4">
         <div className="font-semibold mb-2">Users</div>
         <div className="overflow-auto">
@@ -258,20 +279,45 @@ function AdminInner() {
                         ))}
                       </select>
                     </td>
-                    <td className="p-2 space-x-2">
+                    <td className="p-2">
                       {!isEditing ? (
-                        <>
-                          <button className="underline text-sm" onClick={()=>startEdit(u)}>Edit</button>
-                          <button className="underline text-sm" onClick={()=>resetPassword(u)}>Reset password</button>
-                          <button className="underline text-sm text-red-600" onClick={()=>removeUser(u)}>Delete</button>
-                        </>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
+                            onClick={()=>startEdit(u)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
+                            onClick={()=>resetPassword(u)}
+                          >
+                            Reset password
+                          </button>
+                          <button
+                            className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-red-50 text-red-700 border-red-300"
+                            onClick={()=>removeUser(u)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       ) : (
-                        <>
-                          <button className="underline text-sm" onClick={()=>cancelEdit(u)} disabled={busy}>Cancel</button>
-                          <button className="underline text-sm text-green-700" onClick={()=>saveRow(u)} disabled={busy}>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
+                            onClick={()=>cancelEdit(u)}
+                            disabled={busy}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-green-50 text-green-700 border-green-300 disabled:opacity-60"
+                            onClick={()=>saveRow(u)}
+                            disabled={busy}
+                          >
                             {busy ? 'Saving…' : 'Save'}
                           </button>
-                        </>
+                        </div>
                       )}
                     </td>
                   </tr>
