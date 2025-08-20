@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders, getUser } from '@/lib/api'
+import { Truck, Wrench, FileText, Users as UsersIcon } from 'lucide-react'
 
 type UserRow = {
   id: number
@@ -27,6 +28,8 @@ export default function AdminPage() {
 
 function AdminInner() {
   const me = getUser()
+  const router = useRouter()
+
   const [users, setUsers] = useState<UserRow[]>([])
   const [busy, setBusy] = useState(false)
   const [pmAlertCount, setPmAlertCount] = useState<number>(0)
@@ -158,54 +161,80 @@ function AdminInner() {
 
   const roleOptions = [...roles, 'admin']
 
+  const TileButton = ({
+    onClick,
+    title,
+    subtitle,
+    Icon,
+    badge,
+    ariaLabel,
+  }: {
+    onClick: () => void
+    title: string
+    subtitle: string
+    Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
+    badge?: number
+    ariaLabel?: string
+  }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel ?? title}
+      className="relative flex items-start gap-3 p-4 border rounded-2xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 text-left"
+    >
+      <Icon className="w-5 h-5 mt-0.5" aria-hidden="true" />
+      <div>
+        <div className="font-semibold">{title}</div>
+        <div className="text-sm text-gray-600">{subtitle}</div>
+      </div>
+      {typeof badge === 'number' && badge > 0 && (
+        <span
+          className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white"
+          aria-label={`${badge} alerts`}
+        >
+          {badge}
+        </span>
+      )}
+    </button>
+  )
+
   return (
     <main className="p-6 space-y-5">
-      {/* Header: keep name + logout in upper-right, no 'Signed in as' text */}
+      {/* Header: no name/logout here (already handled by topbar) */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Admin Control Panel</h1>
-        <div className="flex items-center gap-3 text-sm text-gray-700">
-          <span className="font-medium">{me?.name}</span>
-          <span className="text-gray-400">•</span>
-          <Link
-            href="/logout"
-            className="inline-flex items-center px-3 py-1.5 border rounded-md hover:bg-gray-50"
-            aria-label="Log out"
-          >
-            Log out
-          </Link>
-        </div>
+        {/* intentionally empty right side */}
+        <div />
       </div>
 
-      {/* Primary cards */}
+      {/* Primary buttons: Trucks and PM side-by-side first, then Reports, Users */}
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
-        <Link href="/admin/trucks" className="p-4 border rounded-2xl hover:bg-gray-50">
-          <div className="font-semibold">Trucks</div>
-          <div className="text-sm text-gray-600">Manage fleet & PM service</div>
-        </Link>
-
-        <Link href="/reports" className="p-4 border rounded-2xl hover:bg-gray-50">
-          <div className="font-semibold">Reports</div>
-          <div className="text-sm text-gray-600">Browse & manage issues</div>
-        </Link>
-
-        <Link href="/admin/pm" className="p-4 border rounded-2xl hover:bg-gray-50 relative">
-          <div className="font-semibold">PM Alerts & Scheduling</div>
-          <div className="text-sm text-gray-600">See due-soon trucks and book shop dates</div>
-          {pmAlertCount > 0 && (
-            <span
-              className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white"
-              aria-label={`${pmAlertCount} PM alerts`}
-            >
-              {pmAlertCount}
-            </span>
-          )}
-        </Link>
-
-        {/* Users card points to the full Users page */}
-        <Link href="/users" className="p-4 border rounded-2xl hover:bg-gray-50">
-          <div className="font-semibold">Users</div>
-          <div className="text-sm text-gray-600">Create, edit, reset, delete</div>
-        </Link>
+        <TileButton
+          onClick={() => router.push('/admin/trucks')}
+          title="Trucks"
+          subtitle="Manage fleet & PM service"
+          Icon={Truck}
+        />
+        <TileButton
+          onClick={() => router.push('/admin/pm')}
+          title="PM Alerts & Scheduling"
+          subtitle="See due-soon trucks and book shop dates"
+          Icon={Wrench}
+          badge={pmAlertCount}
+          ariaLabel="Preventive maintenance alerts and scheduling"
+        />
+        <TileButton
+          onClick={() => router.push('/reports')}
+          title="Reports"
+          subtitle="Browse & manage issues"
+          Icon={FileText}
+        />
+        <TileButton
+          onClick={() => router.push('/users')}
+          title="Users"
+          subtitle="Create, edit, reset, delete"
+          Icon={UsersIcon}
+        />
       </div>
 
       {/* Quick Add User */}
@@ -221,7 +250,6 @@ function AdminInner() {
             <option value="admin">admin</option>
           </select>
           <input name="password" placeholder="Password (optional)" className="border p-2 rounded-xl" />
-          {/* smaller, tidy button */}
           <button
             disabled={busy}
             className="inline-flex items-center justify-center px-3 py-1.5 text-sm border rounded-lg hover:bg-gray-50 disabled:opacity-60"
@@ -283,18 +311,21 @@ function AdminInner() {
                       {!isEditing ? (
                         <div className="flex flex-wrap gap-2">
                           <button
+                            type="button"
                             className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
                             onClick={()=>startEdit(u)}
                           >
                             Edit
                           </button>
                           <button
+                            type="button"
                             className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
                             onClick={()=>resetPassword(u)}
                           >
                             Reset password
                           </button>
                           <button
+                            type="button"
                             className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-red-50 text-red-700 border-red-300"
                             onClick={()=>removeUser(u)}
                           >
@@ -304,6 +335,7 @@ function AdminInner() {
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           <button
+                            type="button"
                             className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-gray-50"
                             onClick={()=>cancelEdit(u)}
                             disabled={busy}
@@ -311,6 +343,7 @@ function AdminInner() {
                             Cancel
                           </button>
                           <button
+                            type="button"
                             className="inline-flex items-center px-2.5 py-1 text-xs border rounded-md hover:bg-green-50 text-green-700 border-green-300 disabled:opacity-60"
                             onClick={()=>saveRow(u)}
                             disabled={busy}
