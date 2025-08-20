@@ -1,16 +1,15 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
 type Issue = {
   id: number;
   description: string;
-  note?: string;
+  notes?: { id: number; text: string; created_at: string }[];
   resolved: boolean;
   resolved_at?: string;
   created_at: string;
-  photos?: string[];
 };
 
 type Service = {
@@ -28,9 +27,6 @@ export default function TruckDetailPage() {
   const [issues, setIssues] = useState<Issue[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [issue, setIssue] = useState("");
-  const [note, setNote] = useState("");
-  const [files, setFiles] = useState<FileList | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch(`/api/trucks/${truckId}`)
@@ -46,25 +42,27 @@ export default function TruckDetailPage() {
       .then(setServices);
   }, [truckId]);
 
-  async function addIssueWithPhotos(e: React.FormEvent) {
+  async function addIssue(e: React.FormEvent) {
     e.preventDefault();
-    const formData = new FormData();
-    formData.append("description", issue);
-    formData.append("note", note);
-    if (files) {
-      for (let i = 0; i < files.length; i++) {
-        formData.append("photos", files[i]);
-      }
-    }
     await fetch(`/api/trucks/${truckId}/issues`, {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: issue }),
     });
     setIssue("");
-    setNote("");
-    if (fileRef.current) fileRef.current.value = "";
-    setFiles(null);
+    const updated = await fetch(`/api/trucks/${truckId}/issues`).then((r) =>
+      r.json()
+    );
+    setIssues(updated);
+  }
 
+  async function addNote(issueId: number, text: string) {
+    if (!text.trim()) return;
+    await fetch(`/api/issues/${issueId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
     const updated = await fetch(`/api/trucks/${truckId}/issues`).then((r) =>
       r.json()
     );
@@ -96,26 +94,12 @@ export default function TruckDetailPage() {
       {/* Add Issue */}
       <div className="border rounded-lg p-2 space-y-1">
         <div className="font-medium text-sm mb-1">Add Issue</div>
-        <form onSubmit={addIssueWithPhotos} className="grid md:grid-cols-6 gap-1">
+        <form onSubmit={addIssue} className="flex gap-1">
           <input
             value={issue}
             onChange={(e) => setIssue(e.target.value)}
             placeholder="Issue"
-            className="border p-1 rounded text-xs col-span-2"
-          />
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Note"
-            className="border p-1 rounded text-xs col-span-2"
-          />
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="border p-1 rounded text-xs col-span-1"
-            onChange={(e) => setFiles(e.currentTarget.files)}
+            className="border p-1 rounded text-xs flex-1"
           />
           <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">
             Add
@@ -149,18 +133,54 @@ export default function TruckDetailPage() {
         {activeIssues.length === 0 ? (
           <p className="text-xs text-gray-500">No active issues</p>
         ) : (
-          <ul className="space-y-1">
+          <ul className="space-y-2">
             {activeIssues.map((i) => (
-              <li
-                key={i.id}
-                className="border rounded p-2 text-xs flex justify-between items-center"
-              >
-                <span>
-                  {i.description}{" "}
-                  <span className="text-gray-500">
-                    ({new Date(i.created_at).toLocaleDateString()})
+              <li key={i.id} className="border rounded p-2 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span>
+                    {i.description}{" "}
+                    <span className="text-gray-500">
+                      ({new Date(i.created_at).toLocaleDateString()})
+                    </span>
                   </span>
-                </span>
+                </div>
+
+                {/* Notes */}
+                <div className="ml-2 space-y-1">
+                  {i.notes && i.notes.length > 0 && (
+                    <ul className="list-disc ml-4">
+                      {i.notes.map((n) => (
+                        <li key={n.id}>
+                          {n.text}{" "}
+                          <span className="text-gray-400">
+                            ({new Date(n.created_at).toLocaleDateString()})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const form = e.target as HTMLFormElement;
+                      const input = form.elements.namedItem(
+                        "note"
+                      ) as HTMLInputElement;
+                      addNote(i.id, input.value);
+                      input.value = "";
+                    }}
+                    className="flex gap-1"
+                  >
+                    <input
+                      name="note"
+                      placeholder="Add note"
+                      className="border p-1 rounded text-xs flex-1"
+                    />
+                    <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">
+                      +
+                    </button>
+                  </form>
+                </div>
               </li>
             ))}
           </ul>
@@ -173,18 +193,58 @@ export default function TruckDetailPage() {
         {resolvedIssues.length === 0 ? (
           <p className="text-xs text-gray-500">No resolved issues</p>
         ) : (
-          <ul className="space-y-1">
+          <ul className="space-y-2">
             {resolvedIssues.map((i) => (
-              <li
-                key={i.id}
-                className="border rounded p-2 text-xs flex justify-between items-center"
-              >
-                <span>
-                  {i.description}{" "}
-                  <span className="text-gray-500">
-                    (Resolved {i.resolved_at ? new Date(i.resolved_at).toLocaleDateString() : ""})
+              <li key={i.id} className="border rounded p-2 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span>
+                    {i.description}{" "}
+                    <span className="text-gray-500">
+                      (Resolved{" "}
+                      {i.resolved_at
+                        ? new Date(i.resolved_at).toLocaleDateString()
+                        : ""}
+                      )
+                    </span>
                   </span>
-                </span>
+                </div>
+
+                {/* Notes */}
+                <div className="ml-2 space-y-1">
+                  {i.notes && i.notes.length > 0 && (
+                    <ul className="list-disc ml-4">
+                      {i.notes.map((n) => (
+                        <li key={n.id}>
+                          {n.text}{" "}
+                          <span className="text-gray-400">
+                            ({new Date(n.created_at).toLocaleDateString()})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const form = e.target as HTMLFormElement;
+                      const input = form.elements.namedItem(
+                        "note"
+                      ) as HTMLInputElement;
+                      addNote(i.id, input.value);
+                      input.value = "";
+                    }}
+                    className="flex gap-1"
+                  >
+                    <input
+                      name="note"
+                      placeholder="Add note"
+                      className="border p-1 rounded text-xs flex-1"
+                    />
+                    <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">
+                      +
+                    </button>
+                  </form>
+                </div>
               </li>
             ))}
           </ul>
