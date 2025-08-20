@@ -78,8 +78,7 @@ function TruckDetailInner() {
   // Per-issue inline note inputs (right column)
   const [noteTextByDefect, setNoteTextByDefect] = useState<Record<number, string>>({})
 
-  // Which panel to show on the right?
-  // 'active' | 'resolved' | null
+  // Which panel to show on the right? ('active' | 'resolved' | null)
   const [rightPanel, setRightPanel] = useState<'active' | 'resolved' | null>('active')
 
   // Pagination (10/page)
@@ -272,7 +271,8 @@ function TruckDetailInner() {
 
   return (
     <main className="px-4 py-5">
-      <div className="mx-auto max-w-5xl">
+      {/* Left-align the whole page: NO centering container */}
+      <div className="max-w-6xl">
         {/* Header row */}
         <div className="flex items-baseline gap-2 mb-4">
           <Link href="/trucks" className="text-xs underline">&larr; Back to trucks</Link>
@@ -289,7 +289,7 @@ function TruckDetailInner() {
           {truckErr && <span className="text-xs text-red-600">({truckErr})</span>}
         </div>
 
-        {/* PM snapshot (full width but compact) */}
+        {/* PM snapshot (compact) */}
         {pm && (
           <div className="border rounded-lg p-3 mb-4 max-w-2xl">
             <div className="font-semibold text-sm">PM Status</div>
@@ -299,11 +299,11 @@ function TruckDetailInner() {
           </div>
         )}
 
-        {/* Two-column layout */}
+        {/* Two-column layout; right side is sticky */}
         <div className="grid gap-4 md:grid-cols-[minmax(280px,360px)_1fr]">
           {/* LEFT COLUMN (narrow): Add forms + headings */}
           <div className="space-y-3">
-            {/* Add Issue (compact) */}
+            {/* Add Issue */}
             <section className="border rounded-lg p-3">
               <div className="font-semibold text-sm mb-2">Add Issue</div>
               <form onSubmit={addIssueWithPhotos} className="grid gap-2">
@@ -342,7 +342,7 @@ function TruckDetailInner() {
               </form>
             </section>
 
-            {/* Add Service (compact, just below Add Issue) */}
+            {/* Add Service (directly below Add Issue) */}
             <section className="border rounded-lg p-3">
               <div className="font-semibold text-sm mb-2">Add Service</div>
               <form onSubmit={addService} className="grid gap-2">
@@ -375,8 +375,8 @@ function TruckDetailInner() {
             </button>
           </div>
 
-          {/* RIGHT COLUMN (detail panel) */}
-          <div className="space-y-4">
+          {/* RIGHT COLUMN (sticky detail panel) */}
+          <div className="space-y-4 md:sticky md:top-4 self-start">
             {rightPanel === 'active' && (
               <IssuesPanel
                 title="Active Issues"
