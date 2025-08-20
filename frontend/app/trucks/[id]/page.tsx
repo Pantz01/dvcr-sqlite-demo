@@ -1,218 +1,219 @@
-'use client'
-import { useEffect, useState, useRef } from 'react'
-import { useParams } from 'next/navigation'
-import { API, jsonHeaders, authHeaders } from '@/lib/api'
-import Link from 'next/link'
+"use client";
 
-export default function TruckDetail() {
-  const { id } = useParams() as { id: string }
-  const [truck, setTruck] = useState<any>(null)
-  const [reports, setReports] = useState<any[]>([])
-  const [pm, setPm] = useState<any>(null)
+import { useEffect, useState, useRef } from "react";
+import { useParams } from "next/navigation";
 
-  const [issue, setIssue] = useState('')
-  const [note, setNote] = useState('')
-  const [files, setFiles] = useState<FileList | null>(null)
-  const fileRef = useRef<HTMLInputElement | null>(null)
+type Issue = {
+  id: number;
+  description: string;
+  note?: string;
+  resolved: boolean;
+  resolved_at?: string;
+  created_at: string;
+  photos?: string[];
+};
 
-  const [page, setPage] = useState(1)
-  const perPage = 10
+type Service = {
+  id: number;
+  service_type: string;
+  odometer: number;
+  created_at: string;
+};
 
-  const fmt = (v: any) => {
-    const n = Number(v)
-    return Number.isFinite(n) ? n.toLocaleString() : (v ?? '—')
-  }
+export default function TruckDetailPage() {
+  const { id } = useParams();
+  const truckId = id as string;
+
+  const [truck, setTruck] = useState<any>(null);
+  const [issues, setIssues] = useState<Issue[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [issue, setIssue] = useState("");
+  const [note, setNote] = useState("");
+  const [files, setFiles] = useState<FileList | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const [t, r, p] = await Promise.all([
-          fetch(`${API}/trucks/${id}`, { headers: authHeaders() }),
-          fetch(`${API}/trucks/${id}/reports`, { headers: authHeaders() }),
-          fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() })
-        ])
+    fetch(`/api/trucks/${truckId}`)
+      .then((res) => res.json())
+      .then(setTruck);
 
-        if (!cancelled && t.ok) setTruck(await t.json())
-        if (!cancelled && r.ok) setReports(await r.json())
-        if (!cancelled && p.ok) setPm(await p.json())
-      } catch (err) {
-        console.error('load error', err)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [id])
+    fetch(`/api/trucks/${truckId}/issues`)
+      .then((res) => res.json())
+      .then(setIssues);
 
-  async function addService(e:any) {
-    e.preventDefault()
-    const fd = new FormData(e.currentTarget)
-    const body = Object.fromEntries(fd.entries()) as any
-    const r = await fetch(`${API}/trucks/${id}/service`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ service_type: body.service_type, odometer: Number(body.odometer || 0) })
-    })
-    if (!r.ok) { alert(await r.text().catch(()=> 'Failed to save service')); return }
-    setPm(await r.json())
-    e.currentTarget.reset()
-  }
-
-  async function ensureOpenReport(): Promise<any | null> {
-    const open = reports.find(r => r.status === 'OPEN')
-    if (open) return open
-    const r = await fetch(`${API}/trucks/${id}/reports`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({
-        odometer: Number(truck?.odometer || 0),
-        summary: '',
-        type: 'pre'
-      })
-    })
-    if (!r.ok) { alert(await r.text().catch(()=> 'Failed to create report')); return null }
-    const created = await r.json()
-    setReports(prev => [created, ...prev])
-    return created
-  }
+    fetch(`/api/trucks/${truckId}/services`)
+      .then((res) => res.json())
+      .then(setServices);
+  }, [truckId]);
 
   async function addIssueWithPhotos(e: React.FormEvent) {
-    e.preventDefault()
-    if (!issue.trim() && !note.trim() && !files?.length) return
-    const rep = await ensureOpenReport()
-    if (!rep) return
-
-    const r1 = await fetch(`${API}/reports/${rep.id}/defects`, {
-      method: 'POST',
-      headers: jsonHeaders(),
-      body: JSON.stringify({ 
-        component: 'general', 
-        severity: 'minor', 
-        description: issue.trim() || note.trim() 
-      })
-    })
-    if (!r1.ok) { alert(await r1.text().catch(()=> 'Failed to add issue')); return }
-    const defect = await r1.json()
-
-    if (files && files.length > 0) {
-      const fd = new FormData()
-      Array.from(files).forEach(f => fd.append('files', f))
-      const r2 = await fetch(`${API}/defects/${defect.id}/photos`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd
-      })
-      if (!r2.ok) { alert(await r2.text().catch(()=> 'Failed to upload photos')); return }
+    e.preventDefault();
+    const formData = new FormData();
+    formData.append("description", issue);
+    formData.append("note", note);
+    if (files) {
+      for (let i = 0; i < files.length; i++) {
+        formData.append("photos", files[i]);
+      }
     }
+    await fetch(`/api/trucks/${truckId}/issues`, {
+      method: "POST",
+      body: formData,
+    });
+    setIssue("");
+    setNote("");
+    if (fileRef.current) fileRef.current.value = "";
+    setFiles(null);
 
-    setIssue('')
-    setNote('')
-    setFiles(null)
-    if (fileRef.current) fileRef.current.value = ''
-
-    try {
-      const rr = await fetch(`${API}/trucks/${id}/reports`, { headers: authHeaders() })
-      if (rr.ok) setReports(await rr.json())
-    } catch {}
-    try {
-      const pp = await fetch(`${API}/trucks/${id}/pm-next`, { headers: authHeaders() })
-      if (pp.ok) setPm(await pp.json())
-    } catch {}
+    const updated = await fetch(`/api/trucks/${truckId}/issues`).then((r) =>
+      r.json()
+    );
+    setIssues(updated);
   }
 
-  if (!truck) return <main className="p-4 text-sm">Loading…</main>
+  async function addService(e: React.FormEvent) {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    await fetch(`/api/trucks/${truckId}/services`, {
+      method: "POST",
+      body: formData,
+    });
+    form.reset();
+    const updated = await fetch(`/api/trucks/${truckId}/services`).then((r) =>
+      r.json()
+    );
+    setServices(updated);
+  }
 
-  const activeReports = reports.flatMap(r => 
-    (r.defects || []).map((d:any) => ({...d, reportId: r.id, created_at: r.created_at}))
-  ).filter((d:any) => !d.resolved)
-
-  const resolvedReports = reports.flatMap(r => 
-    (r.defects || []).map((d:any) => ({...d, reportId: r.id, created_at: r.created_at}))
-  ).filter((d:any) => d.resolved)
-
-  const paginatedActive = activeReports.slice((page-1)*perPage, page*perPage)
+  const activeIssues = issues.filter((i) => !i.resolved);
+  const resolvedIssues = issues.filter((i) => i.resolved);
 
   return (
-    <main className="p-4 space-y-4 text-sm">
-      <div><Link href="/trucks" className="underline">&larr; Back</Link></div>
-      <h1 className="text-xl font-semibold">Truck #{truck.number}</h1>
+    <div className="p-4 space-y-4">
+      <h1 className="text-lg font-semibold">Truck #{truck?.number}</h1>
 
-      {pm && (
-        <div className="border rounded-lg p-2 space-y-0.5">
-          <div className="font-medium">PM Status</div>
-          <div>Odometer: {fmt(pm.odometer)} mi</div>
-          <div>Oil next: {fmt(pm.oil_next_due)} (in {fmt(pm.oil_miles_remaining)} mi)</div>
-          <div>Chassis next: {fmt(pm.chassis_next_due)} (in {fmt(pm.chassis_miles_remaining)} mi)</div>
-        </div>
-      )}
+      {/* Add Issue */}
+      <div className="border rounded-lg p-2 space-y-1">
+        <div className="font-medium text-sm mb-1">Add Issue</div>
+        <form onSubmit={addIssueWithPhotos} className="grid md:grid-cols-6 gap-1">
+          <input
+            value={issue}
+            onChange={(e) => setIssue(e.target.value)}
+            placeholder="Issue"
+            className="border p-1 rounded text-xs col-span-2"
+          />
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Note"
+            className="border p-1 rounded text-xs col-span-2"
+          />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="border p-1 rounded text-xs col-span-1"
+            onChange={(e) => setFiles(e.currentTarget.files)}
+          />
+          <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">
+            Add
+          </button>
+        </form>
+      </div>
 
-      {/* Add issue/note/photos */}
-      <form onSubmit={addIssueWithPhotos} className="grid md:grid-cols-6 gap-1 border rounded-lg p-2">
-        <input
-          value={issue}
-          onChange={(e) => setIssue(e.target.value)}
-          placeholder="Issue"
-          className="border p-1 rounded text-xs col-span-2"
-        />
-        <input
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Note"
-          className="border p-1 rounded text-xs col-span-2"
-        />
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          multiple
-          className="border p-1 rounded text-xs col-span-1"
-          onChange={(e) => setFiles(e.currentTarget.files)}
-        />
-        <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">Add</button>
-      </form>
-
-      {/* Add service */}
-      <form onSubmit={addService} className="grid md:grid-cols-3 gap-1 border rounded-lg p-2">
-        <select name="service_type" className="border p-1 rounded text-xs">
-          <option value="oil">Oil change</option>
-          <option value="chassis">Chassis lube</option>
-        </select>
-        <input name="odometer" placeholder="Odometer" className="border p-1 rounded text-xs" required/>
-        <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">Log</button>
-      </form>
+      {/* Add Service */}
+      <div className="border rounded-lg p-2 space-y-1">
+        <div className="font-medium text-sm mb-1">Add Service</div>
+        <form onSubmit={addService} className="grid md:grid-cols-3 gap-1">
+          <select name="service_type" className="border p-1 rounded text-xs">
+            <option value="oil">Oil change</option>
+            <option value="chassis">Chassis lube</option>
+          </select>
+          <input
+            name="odometer"
+            placeholder="Odometer"
+            className="border p-1 rounded text-xs"
+            required
+          />
+          <button className="border rounded px-2 py-0.5 text-xs hover:bg-gray-100">
+            Log
+          </button>
+        </form>
+      </div>
 
       {/* Active Issues */}
-      <div className="border rounded-lg p-2 space-y-1">
-        <div className="font-medium">Active Issues</div>
-        {paginatedActive.length === 0 && (
-          <div className="text-gray-500">None</div>
-        )}
-        {paginatedActive.map((d:any) => (
-          <a key={d.id} href={`/reports/${d.reportId}`} className="block border rounded p-1 hover:bg-gray-50">
-            <div className="text-xs text-gray-500">{new Date(d.created_at).toLocaleDateString()}</div>
-            <div>{d.description}</div>
-          </a>
-        ))}
-        {activeReports.length > perPage && (
-          <div className="flex gap-1">
-            <button disabled={page===1} onClick={()=>setPage(p=>p-1)} className="px-2 py-0.5 border rounded text-xs">Prev</button>
-            <button disabled={page*perPage>=activeReports.length} onClick={()=>setPage(p=>p+1)} className="px-2 py-0.5 border rounded text-xs">Next</button>
-          </div>
+      <div className="border rounded-lg p-2 space-y-2">
+        <div className="font-medium text-sm">Active Issues</div>
+        {activeIssues.length === 0 ? (
+          <p className="text-xs text-gray-500">No active issues</p>
+        ) : (
+          <ul className="space-y-1">
+            {activeIssues.map((i) => (
+              <li
+                key={i.id}
+                className="border rounded p-2 text-xs flex justify-between items-center"
+              >
+                <span>
+                  {i.description}{" "}
+                  <span className="text-gray-500">
+                    ({new Date(i.created_at).toLocaleDateString()})
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 
       {/* Resolved Issues */}
-      <div className="border rounded-lg p-2 space-y-1">
-        <div className="font-medium">Resolved Issues</div>
-        {resolvedReports.length === 0 && (
-          <div className="text-gray-500">None</div>
+      <div className="border rounded-lg p-2 space-y-2">
+        <div className="font-medium text-sm">Resolved Issues</div>
+        {resolvedIssues.length === 0 ? (
+          <p className="text-xs text-gray-500">No resolved issues</p>
+        ) : (
+          <ul className="space-y-1">
+            {resolvedIssues.map((i) => (
+              <li
+                key={i.id}
+                className="border rounded p-2 text-xs flex justify-between items-center"
+              >
+                <span>
+                  {i.description}{" "}
+                  <span className="text-gray-500">
+                    (Resolved {i.resolved_at ? new Date(i.resolved_at).toLocaleDateString() : ""})
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
         )}
-        {resolvedReports.map((d:any) => (
-          <a key={d.id} href={`/reports/${d.reportId}`} className="block border rounded p-1 hover:bg-gray-50">
-            <div className="text-xs text-gray-500">{new Date(d.created_at).toLocaleDateString()}</div>
-            <div>{d.description}</div>
-          </a>
-        ))}
       </div>
-    </main>
-  )
+
+      {/* Services */}
+      <div className="border rounded-lg p-2 space-y-2">
+        <div className="font-medium text-sm">Services</div>
+        {services.length === 0 ? (
+          <p className="text-xs text-gray-500">No services logged</p>
+        ) : (
+          <ul className="space-y-1">
+            {services.map((s) => (
+              <li
+                key={s.id}
+                className="border rounded p-2 text-xs flex justify-between items-center"
+              >
+                <span>
+                  {s.service_type} @ {s.odometer} miles{" "}
+                  <span className="text-gray-500">
+                    ({new Date(s.created_at).toLocaleDateString()})
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 }
