@@ -1,10 +1,12 @@
+// app/admin/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
-import { API, authHeaders, jsonHeaders, getUser } from '@/lib/api'
+import { API, authHeaders, jsonHeaders } from '@/lib/api'
+import { Truck, Wrench, FileWarning, Users as UsersIcon, DollarSign } from 'lucide-react'
 
 type UserRow = {
   id: number
@@ -26,7 +28,6 @@ export default function AdminPage() {
 }
 
 function AdminInner() {
-  const me = getUser()
   const router = useRouter()
 
   const [users, setUsers] = useState<UserRow[]>([])
@@ -159,19 +160,28 @@ function AdminInner() {
     title,
     subtitle,
     badge,
+    Icon,
   }: {
     onClick: () => void
     title: string
     subtitle: string
     badge?: number
+    Icon?: React.ComponentType<{ size?: number; className?: string }>
   }) => (
     <button
       type="button"
       onClick={onClick}
-      className="relative flex flex-col items-start p-4 border rounded-2xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 text-left"
+      className="relative flex items-start gap-3 p-4 border rounded-2xl hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-200 text-left"
     >
-      <div className="font-semibold">{title}</div>
-      <div className="text-sm text-gray-600">{subtitle}</div>
+      {Icon ? (
+        <span className="shrink-0 mt-0.5">
+          <Icon size={20} className="text-gray-700" />
+        </span>
+      ) : null}
+      <span className="flex flex-col">
+        <span className="font-semibold">{title}</span>
+        <span className="text-sm text-gray-600">{subtitle}</span>
+      </span>
       {typeof badge === 'number' && badge > 0 && (
         <span
           className="absolute top-3 right-3 inline-flex items-center justify-center text-xs font-semibold px-2 py-1 rounded-full bg-red-600 text-white"
@@ -189,28 +199,38 @@ function AdminInner() {
         <div />
       </div>
 
-      {/* Primary buttons: Trucks + PM first, then Reports, Users */}
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* Primary buttons: Trucks + PM first, then Reports, Users, Costs */}
+      <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-3">
         <TileButton
           onClick={() => router.push('/admin/trucks')}
           title="Trucks"
           subtitle="Manage fleet & PM service"
+          Icon={Truck}
         />
         <TileButton
           onClick={() => router.push('/admin/pm')}
           title="PM Alerts & Scheduling"
           subtitle="See due-soon trucks and book shop dates"
           badge={pmAlertCount}
+          Icon={Wrench}
         />
         <TileButton
           onClick={() => router.push('/reports')}
           title="Reports"
           subtitle="Browse & manage issues"
+          Icon={FileWarning}
         />
         <TileButton
           onClick={() => router.push('/users')}
           title="Users"
           subtitle="Create, edit, reset, delete"
+          Icon={UsersIcon}
+        />
+        <TileButton
+          onClick={() => router.push('/admin/costs')}
+          title="Costs (YTD)"
+          subtitle="Upload & view per-truck totals"
+          Icon={DollarSign}
         />
       </div>
 
