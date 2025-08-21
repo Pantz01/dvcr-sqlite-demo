@@ -232,6 +232,11 @@ function AdminInner() {
           subtitle="Upload & view per-truck totals"
           Icon={DollarSign}
         />
+        <TileButton
+        onClick={() => router.push('/admin/fleet')}
+        title="Fleet Info"
+        subtitle="VIN, serials, keys, fleets"
+        />
       </div>
 
       {/* Quick Add User */}
