@@ -237,6 +237,11 @@ function AdminInner() {
         title="Fleet Info"
         subtitle="VIN, serials, keys, fleets"
         />
+        <TileButton
+        onClick={() => router.push('/admin/trucks/setup')}
+        title="Truck Setup"
+        subtitle="Add trucks & assign fleet"
+        />
       </div>
 
       {/* Quick Add User */}
