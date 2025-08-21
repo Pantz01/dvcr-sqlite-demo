@@ -1,7 +1,7 @@
 // app/admin/costs/page.tsx
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders } from '@/lib/api'
@@ -33,15 +33,16 @@ export default function CostsPage() {
 }
 
 function CostsInner() {
+  const fileRef = useRef<HTMLInputElement>(null)
+
   const [trucks, setTrucks] = useState<Truck[]>([])
+  const [ytdByTruckNo, setYtdByTruckNo] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [unmatchedCount, setUnmatchedCount] = useState(0)
+  const [lastImport, setLastImport] = useState<string | null>(null)
 
-  // Map truckNumber -> cost
-  const [ytdByTruckNo, setYtdByTruckNo] = useState<Record<string, number>>({})
-  const [unmatched, setUnmatched] = useState<ParsedRow[]>([])
-
-  // Load trucks
+  // Load trucks for display order / names
   useEffect(() => {
     ;(async () => {
       setError(null)
@@ -69,72 +70,37 @@ function CostsInner() {
     [ytdByTruckNo]
   )
 
-  // Merge parsed rows into state and compute unmatched
-  function applyParsedRows(rows: ParsedRow[]) {
-    const byNo = { ...ytdByTruckNo }
-    const truckNoSet = new Set(trucks.map(t => norm(t.number)))
-    const unmatchedRows: ParsedRow[] = []
+  const rowsForDisplay = useMemo(() => {
+    // Show all trucks; if a truck has no cost, display blank
+    return trucks
+      .slice()
+      .sort((a, b) => a.number.localeCompare(b.number))
+      .map(t => ({
+        id: t.id,
+        number: t.number,
+        cost: ytdByTruckNo[t.number],
+      }))
+  }, [trucks, ytdByTruckNo])
 
-    for (const r of rows) {
-      const key = norm(r.truckNumber)
-      if (truckNoSet.has(key)) {
-        // use original case from your trucks list for display consistency
-        const original = trucks.find(t => norm(t.number) === key)?.number ?? r.truckNumber
-        byNo[original] = r.ytdCost
-      } else {
-        unmatchedRows.push(r)
-      }
-    }
-
-    setYtdByTruckNo(byNo)
-    setUnmatched(unmatchedRows)
+  /* =====================
+     Import (compact UI)
+     ===================== */
+  function triggerImport() {
+    fileRef.current?.click()
   }
 
-  // File upload handler
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
+    setLastImport(f.name)
     setLoading(true)
     setError(null)
+    setUnmatchedCount(0)
     try {
-      // Try ArrayBuffer path (XLSX/XLS/CSV)
-      const buf = await f.arrayBuffer()
-      const wb = XLSX.read(buf, { type: 'array' })
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' })
-
-      const parsed: ParsedRow[] = []
-      for (const row of rows) {
-        const truckNumber = pickTruckNumber(row)
-        const y = pickCost(row)
-        if (truckNumber != null && y != null && Number.isFinite(y)) {
-          parsed.push({ truckNumber, ytdCost: y })
-        }
-      }
-
-      // Fallback: CSV-as-text (some CSVs parse better via string path)
-      if (parsed.length === 0) {
-        const text = await f.text().catch(() => '')
-        if (text) {
-          const wb2 = XLSX.read(text, { type: 'string' })
-          const ws2 = wb2.Sheets[wb2.SheetNames[0]]
-          const rows2 = XLSX.utils.sheet_to_json<Record<string, any>>(ws2, { defval: '' })
-          for (const row of rows2) {
-            const truckNumber = pickTruckNumber(row)
-            const y = pickCost(row)
-            if (truckNumber != null && y != null && Number.isFinite(y)) {
-              parsed.push({ truckNumber, ytdCost: y })
-            }
-          }
-        }
-      }
-
-      if (parsed.length === 0) {
-        alert('Could not find columns for Truck/Number and Cost/YTD in the uploaded file.')
-        return
-      }
-
-      applyParsedRows(parsed)
+      const parsed = await parseFileSmart(f)
+      const { matched, unmatched } = applyParsedRows(parsed, trucks, ytdByTruckNo)
+      setYtdByTruckNo(matched)
+      setUnmatchedCount(unmatched)
     } catch (err: any) {
       setError(err?.message ?? 'Failed to parse file')
     } finally {
@@ -143,6 +109,9 @@ function CostsInner() {
     }
   }
 
+  /* =====================
+     Actions
+     ===================== */
   function saveLocal() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(ytdByTruckNo))
@@ -156,20 +125,30 @@ function CostsInner() {
     if (!confirm('Clear saved YTD costs?')) return
     localStorage.removeItem(LS_KEY)
     setYtdByTruckNo({})
-    setUnmatched([])
+    setUnmatchedCount(0)
+    setLastImport(null)
   }
 
   function exportNormalizedCsv() {
-    // Produce a simple two-column CSV: Truck Number, YTD Cost
+    // Export displayed trucks (stable order) + YTD TOTAL line
     const headers = ['Truck Number', 'YTD Cost']
     const lines = [headers.join(',')]
-    for (const [no, cost] of Object.entries(ytdByTruckNo)) {
-      lines.push(`${csvCell(no)},${csvCell(cost)}`)
+
+    for (const r of rowsForDisplay) {
+      const val =
+        typeof r.cost === 'number' && Number.isFinite(r.cost)
+          ? r.cost.toFixed(2)
+          : ''
+      lines.push(`${csvCell(r.number)},${val}`)
     }
+
+    lines.push('')
+    lines.push(`${csvCell('YTD Total')},${totalCost.toFixed(2)}`)
+
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = 'ytd-costs-normalized.csv'
+    a.download = 'ytd-costs.csv'
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -206,29 +185,32 @@ function CostsInner() {
     }
   }
 
-  const rowsForDisplay = useMemo(() => {
-    // show all trucks; if a truck has no cost, show blank
-    return trucks
-      .slice()
-      .sort((a, b) => a.number.localeCompare(b.number))
-      .map(t => ({
-        id: t.id,
-        number: t.number,
-        cost: ytdByTruckNo[t.number],
-      }))
-  }, [trucks, ytdByTruckNo])
-
   return (
-    <main className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <main className="p-6 space-y-4">
+      {/* Header + compact actions */}
+      <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Maintenance Cost Tracker (YTD)</h1>
         <div className="flex items-center gap-2">
           <button
             className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={exportNormalizedCsv}
-            title="Download a normalized CSV of the current YTD table"
+            onClick={triggerImport}
+            title="Import CSV/XLSX"
           >
-            Export CSV
+            Import
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.xlsx,.xls"
+            className="hidden"
+            onChange={onFile}
+          />
+          <button
+            className="px-2.5 py-1 text-[11px] border rounded-md"
+            onClick={exportNormalizedCsv}
+            title="Download CSV"
+          >
+            Export
           </button>
           <button
             className="px-2.5 py-1 text-[11px] border rounded-md"
@@ -249,109 +231,128 @@ function CostsInner() {
             onClick={trySyncToServer}
             title="Try to POST to /costs/bulk-ytd"
           >
-            Sync Server
+            Sync
           </button>
         </div>
       </div>
 
-      {/* Upload */}
-      <section className="border rounded-xl p-3">
-        <div className="flex items-center justify-between">
-          <div className="font-medium text-sm">Upload YTD Spreadsheet</div>
-          <label className="cursor-pointer inline-flex items-center gap-2 text-[12px] border rounded-md px-2.5 py-1">
-            <span>Choose file</span>
-            <input
-              type="file"
-              accept=".csv,.xlsx,.xls"
-              className="hidden"
-              onChange={onFile}
-              disabled={loading}
-            />
-          </label>
-        </div>
-        <p className="text-xs text-gray-600 mt-2">
-          Expected columns (auto-detected): <b>Truck Number</b> and <b>YTD Cost</b>. Accepted synonyms:
-          <i> truck, number, unit, vehicle</i> and <i> ytd, cost, maintenance cost, ytd cost</i>.
-        </p>
-        {loading && <div className="text-xs text-gray-600 mt-2">Parsing…</div>}
-        {error && <div className="text-xs text-red-600 mt-2">{error}</div>}
-      </section>
-
-      {/* Summary */}
-      <div className="text-sm text-gray-700 flex flex-wrap items-center gap-2">
-        <span>Total trucks: <b>{trucks.length}</b></span>
-        <span className="opacity-60">•</span>
-        <span>With YTD data: <b>{Object.keys(ytdByTruckNo).length}</b></span>
-        <span className="opacity-60">•</span>
-        <span>Total YTD: <b>${fmtMoney(totalCost)}</b></span>
+      {/* tiny status line */}
+      <div className="text-[11px] text-gray-600 h-4 flex items-center gap-2">
+        {loading && <span>Parsing…</span>}
+        {!loading && lastImport && <span>Imported: <b>{lastImport}</b></span>}
+        {!loading && unmatchedCount > 0 && (
+          <span className="text-[11px] text-amber-700">
+            • Unmatched rows: {unmatchedCount}
+          </span>
+        )}
+        {error && <span className="text-red-600">• {error}</span>}
       </div>
 
-      {/* Table */}
-      <section className="border rounded-xl overflow-hidden">
-        <div className="px-3 py-2 font-semibold border-b text-sm">YTD by Truck</div>
+      {/* Narrow, left-aligned table */}
+      <section className="border rounded-xl overflow-hidden max-w-xl">
+        <div className="px-3 py-2 font-semibold border-b text-sm">Year-to-Date Costs</div>
         <div className="max-h-[60vh] overflow-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-xs">
               <tr>
-                <th className="text-left p-2 w-40">Truck</th>
-                <th className="text-right p-2 w-40">YTD Cost</th>
+                <th className="text-left px-2 py-1.5 w-40">Truck</th>
+                <th className="text-right px-2 py-1.5 w-40">YTD Cost</th>
               </tr>
             </thead>
             <tbody>
               {rowsForDisplay.map(r => (
                 <tr key={r.id} className="border-t">
-                  <td className="p-2">{r.number}</td>
-                  <td className="p-2 text-right">{r.cost != null ? `$${fmtMoney(r.cost)}` : <span className="text-gray-400">—</span>}</td>
+                  <td className="px-2 py-1.5">{r.number}</td>
+                  <td className="px-2 py-1.5 text-right">
+                    {typeof r.cost === 'number' && Number.isFinite(r.cost)
+                      ? `$${fmtMoney(r.cost)}`
+                      : <span className="text-gray-400">—</span>}
+                  </td>
                 </tr>
               ))}
               {rowsForDisplay.length === 0 && (
                 <tr>
-                  <td colSpan={2} className="p-3 text-xs text-gray-500">No trucks found.</td>
+                  <td colSpan={2} className="px-2 py-2 text-xs text-gray-500">No trucks found.</td>
                 </tr>
               )}
             </tbody>
+            {/* Right-aligned single-line total */}
             <tfoot className="bg-gray-50 text-xs">
               <tr>
-                <td className="p-2 font-medium text-right">Total</td>
-                <td className="p-2 text-right font-semibold">${fmtMoney(totalCost)}</td>
+                <td colSpan={2} className="px-2 py-2 text-right font-semibold">
+                  YTD Total: ${fmtMoney(totalCost)}
+                </td>
               </tr>
             </tfoot>
           </table>
         </div>
       </section>
-
-      {/* Unmatched */}
-      {unmatched.length > 0 && (
-        <section className="border rounded-xl p-3">
-          <div className="font-medium text-sm mb-2">Unmatched from Upload</div>
-          <p className="text-xs text-gray-600 mb-2">
-            These rows didn’t match any existing truck number in your system. Fix the truck number in your spreadsheet or add the truck, then re-upload.
-          </p>
-          <div className="max-h-[30vh] overflow-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="text-left p-2">Truck (from file)</th>
-                  <th className="text-right p-2">YTD</th>
-                </tr>
-              </thead>
-              <tbody>
-                {unmatched.map((u, i) => (
-                  <tr key={`${u.truckNumber}-${i}`} className="border-t">
-                    <td className="p-2">{u.truckNumber}</td>
-                    <td className="p-2 text-right">${fmtMoney(u.ytdCost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
     </main>
   )
 }
 
-/* =============== helpers =============== */
+/* =============== parsing helpers (smart + compact) =============== */
+
+async function parseFileSmart(file: File): Promise<ParsedRow[]> {
+  // 1) Try ArrayBuffer (works for xlsx/xls/csv)
+  const parsedFromArray = await tryParseArrayBuffer(file).catch(() => [] as ParsedRow[])
+  if (parsedFromArray.length > 0) return parsedFromArray
+
+  // 2) Fallback: read as text (some CSVs parse better this way)
+  const parsedFromText = await tryParseText(file).catch(() => [] as ParsedRow[])
+  return parsedFromText
+}
+
+async function tryParseArrayBuffer(file: File): Promise<ParsedRow[]> {
+  const buf = await file.arrayBuffer()
+  const wb = XLSX.read(buf, { type: 'array' })
+  return extractRowsFromWorkbook(wb)
+}
+
+async function tryParseText(file: File): Promise<ParsedRow[]> {
+  const text = await file.text()
+  const wb = XLSX.read(text, { type: 'string' })
+  return extractRowsFromWorkbook(wb)
+}
+
+function extractRowsFromWorkbook(wb: XLSX.WorkBook): ParsedRow[] {
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' })
+
+  const parsed: ParsedRow[] = []
+  for (const row of rows) {
+    const t = pickTruckCell(row)
+    if (!t) continue
+    const y = pickCostCell(row, t.key, t.value)
+    if (y != null && Number.isFinite(y)) {
+      parsed.push({ truckNumber: t.value, ytdCost: y })
+    }
+  }
+  return parsed
+}
+
+function applyParsedRows(
+  rows: ParsedRow[],
+  trucks: Truck[],
+  existing: Record<string, number>
+) {
+  const byNo = { ...existing }
+  const truckNoSet = new Set(trucks.map(t => norm(t.number)))
+  let unmatched = 0
+
+  for (const r of rows) {
+    const key = norm(r.truckNumber)
+    if (truckNoSet.has(key)) {
+      const original = trucks.find(t => norm(t.number) === key)?.number ?? r.truckNumber
+      byNo[original] = r.ytdCost
+    } else {
+      unmatched++
+    }
+  }
+  return { matched: byNo, unmatched }
+}
+
+/* =============== small utilities =============== */
 
 function norm(s: string) {
   return (s || '').trim().toLowerCase()
@@ -359,6 +360,7 @@ function norm(s: string) {
 
 function parseMoney(v: any): number | null {
   if (v == null) return null
+  if (typeof v === 'number' && Number.isFinite(v)) return v
   const s = String(v).replace(/[\s,$]/g, '')
   if (s === '') return null
   const n = Number(s)
@@ -374,39 +376,80 @@ function fmtMoney(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-// heuristics to find the truck-number column
-function pickTruckNumber(row: Record<string, any>): string | null {
+/* ---- smarter detection helpers (avoids mixing truck # as cost) ---- */
+
+function pickTruckCell(row: Record<string, any>): { key: string; value: string } | null {
   const keys = Object.keys(row)
-  const candidates = [
-    'truck number', 'truck', 'number', 'unit', 'vehicle', 'truck_no', 'trucknum', 'unit number'
-  ]
+  // 1) Prefer headers that look like truck/unit/vehicle
   for (const k of keys) {
-    if (candidates.includes(norm(k))) return String(row[k]).trim()
+    const nk = norm(k)
+    if (/(^|[^a-z])(truck|unit|vehicle)([^a-z]|$)/.test(nk)) {
+      const val = String(row[k]).trim()
+      if (val) return { key: k, value: val }
+    }
   }
-  // fallback: first column that looks alphanum without spaces
+  // 2) Next: generic "number"/"id"/"no"
   for (const k of keys) {
-    const val = String(row[k]).trim()
-    if (val && /^[\w-]+$/i.test(val)) return val
+    const nk = norm(k)
+    if (/(^|[^a-z])(number|id|no\.?)([^a-z]|$)/.test(nk)) {
+      const val = String(row[k]).trim()
+      if (val) return { key: k, value: val }
+    }
+  }
+  // 3) Fallback: first ID-looking cell (alphanum/hyphen, not currency)
+  for (const k of keys) {
+    const raw = String(row[k]).trim()
+    if (raw && /^[A-Za-z0-9-]+$/.test(raw) && !/[,$]/.test(raw)) {
+      return { key: k, value: raw }
+    }
   }
   return null
 }
 
-// heuristics to find a YTD cost column
-function pickCost(row: Record<string, any>): number | null {
-  const keys = Object.keys(row)
-  const candidates = [
-    'ytd cost', 'ytd', 'maintenance cost', 'cost', 'amount', 'total', 'ytd_cost'
-  ]
+function pickCostCell(
+  row: Record<string, any>,
+  truckKey: string,
+  truckVal: string
+): number | null {
+  const keys = Object.keys(row).filter(k => k !== truckKey)
+  const truckNum = parseMoney(truckVal)
+
+  // 1) Strong header match: "ytd" plus ("cost" or "total" or "amount")
   for (const k of keys) {
-    if (candidates.includes(norm(k))) {
+    const nk = norm(k)
+    const hasYtd = /\bytd\b/.test(nk) || nk.includes('year') // e.g. "year to date"
+    const hasMoneyWord = /\bcost\b/.test(nk) || /\btotal\b/.test(nk) || /\bamount\b/.test(nk)
+    if (hasYtd && hasMoneyWord) {
       const n = parseMoney(row[k])
       if (n != null) return n
     }
   }
-  // fallback: first numeric-ish column with $/comma/decimal
+
+  // 2) Any header with money word (not the truck column)
+  for (const k of keys) {
+    const nk = norm(k)
+    if (/\bcost\b|\bamount\b|\btotal\b/.test(nk)) {
+      const n = parseMoney(row[k])
+      if (n != null) return n
+    }
+  }
+
+  // 3) Cells that look like currency (contain $ or comma)
+  for (const k of keys) {
+    const raw = String(row[k])
+    if (/[,$]/.test(raw)) {
+      const n = parseMoney(raw)
+      if (n != null) return n
+    }
+  }
+
+  // 4) Last resort: choose the largest numeric value that isn't the truck value
+  let best: number | null = null
   for (const k of keys) {
     const n = parseMoney(row[k])
-    if (n != null) return n
+    if (n == null) continue
+    if (truckNum != null && n === truckNum) continue
+    if (best == null || n > best) best = n
   }
-  return null
+  return best
 }
