@@ -117,9 +117,7 @@ function FleetInner() {
 
   /* ===== Import / Export / Save / Clear / Sync ===== */
 
-  function triggerImport() {
-    fileRef.current?.click()
-  }
+  function triggerImport() { fileRef.current?.click() }
 
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
@@ -159,16 +157,7 @@ function FleetInner() {
   }
 
   function exportCsv() {
-    const headers = [
-      'Truck Number',
-      'VIN',
-      'ELD Serial',
-      'Camera Serial',
-      'Year',
-      'Make',
-      'Model',
-      'Fleet Name',
-    ]
+    const headers = ['Truck Number','VIN','ELD Serial','Camera Serial','Year','Make','Model','Fleet Name']
     const lines = [headers.join(',')]
     for (const { truck, meta } of rows) {
       const cells = [
@@ -191,7 +180,6 @@ function FleetInner() {
     URL.revokeObjectURL(a.href)
   }
 
-  // Optional: backend sync (create /trucks/bulk-meta if desired)
   async function trySyncToServer() {
     try {
       const body = rows.map(({ truck, meta }) => ({
@@ -204,16 +192,10 @@ function FleetInner() {
         model: meta.model ?? null,
         fleet: meta.fleet ?? null,
       }))
-      if (body.length === 0) {
-        alert('No data to sync.')
-        return
-      }
+      if (body.length === 0) { alert('No data to sync.'); return }
       const r = await fetch(`${API}/trucks/bulk-meta`, {
         method: 'POST',
-        headers: {
-          ...authHeaders(),
-          'Content-Type': 'application/json',
-        } as any,
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' } as any,
         body: JSON.stringify(body),
       })
       if (!r.ok) {
@@ -230,27 +212,17 @@ function FleetInner() {
   /* ===== Render ===== */
 
   return (
-    <main className="p-6 space-y-4">
-      {/* Header + actions */}
-      <div className="flex items-center flex-wrap gap-2">
-        <h1 className="text-xl font-semibold">Fleet Information</h1>
+    <main className="p-6 space-y-4 max-w-4xl mx-auto">
+      {/* Header + actions (compact) */}
+      <div className="flex items-center flex-wrap gap-2 leading-tight">
+        <h1 className="text-lg font-semibold">Fleet Information</h1>
         <div className="flex items-center gap-2">
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={triggerImport} title="Import CSV/XLSX">
-            Import
-          </button>
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={triggerImport} title="Import CSV/XLSX">Import</button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onFile} />
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={exportCsv} title="Download CSV">
-            Export
-          </button>
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={saveLocal} title="Save to this browser">
-            Save
-          </button>
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={clearLocal} title="Clear saved fleet info">
-            Clear
-          </button>
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={trySyncToServer} title="Try POST /trucks/bulk-meta">
-            Sync
-          </button>
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={exportCsv} title="Download CSV">Export</button>
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={saveLocal} title="Save to this browser">Save</button>
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={clearLocal} title="Clear saved fleet info">Clear</button>
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={trySyncToServer} title="Try POST /trucks/bulk-meta">Sync</button>
         </div>
       </div>
 
@@ -258,72 +230,73 @@ function FleetInner() {
       <div className="text-[11px] text-gray-600 h-4 flex items-center gap-2">
         {loading && <span>Parsing…</span>}
         {!loading && lastImport && <span>Imported: <b>{lastImport}</b></span>}
-        {!loading && unmatchedCount > 0 && (
-          <span className="text-[11px] text-amber-700">• Unmatched rows: {unmatchedCount}</span>
-        )}
+        {!loading && unmatchedCount > 0 && <span className="text-[11px] text-amber-700">• Unmatched rows: {unmatchedCount}</span>}
         {error && <span className="text-red-600">• {error}</span>}
       </div>
 
-      {/* Filters */}
-      <div className="flex items-end gap-2">
+      {/* Filters (narrow) */}
+      <div className="flex items-end gap-3">
         <label className="grid gap-1 text-xs">
           <span className="text-gray-600">Fleet</span>
-          <select
-            className="border rounded-md px-2 py-1 text-sm"
-            value={fleetFilter}
-            onChange={(e) => setFleetFilter(e.target.value)}
-          >
+          <select className="border rounded-md px-2 py-1 text-sm w-40" value={fleetFilter} onChange={(e) => setFleetFilter(e.target.value)}>
             <option value="__all__">All Fleets</option>
             {fleets.map(f => <option key={f} value={f}>{f}</option>)}
           </select>
         </label>
         <label className="grid gap-1 text-xs">
           <span className="text-gray-600">Search</span>
-          <input
-            className="border rounded-md px-2 py-1 text-sm"
-            placeholder="Truck, VIN, serial, etc."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+          <input className="border rounded-md px-2 py-1 text-sm w-56" placeholder="Truck, VIN, serial, etc." value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
       </div>
 
-      {/* Read-only table */}
-      <section className="border rounded-xl overflow-auto">
-        <div className="px-3 py-2 font-semibold border-b text-sm">Fleet Inventory</div>
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs">
-            <tr>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Truck</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">VIN</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">ELD Serial</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Camera Serial</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Year</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Make</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Model</th>
-              <th className="text-left px-2 py-1.5 whitespace-nowrap">Fleet Name</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ truck, meta }) => (
-              <tr key={truck.id} className="border-t align-top">
-                <td className="px-2 py-1.5 font-medium whitespace-nowrap">{truck.number}</td>
-                <td className="px-2 py-1.5">{display(meta.vin)}</td>
-                <td className="px-2 py-1.5">{display(meta.eld)}</td>
-                <td className="px-2 py-1.5">{display(meta.camera)}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">{meta.year ?? <span className="text-gray-400">—</span>}</td>
-                <td className="px-2 py-1.5">{display(meta.make)}</td>
-                <td className="px-2 py-1.5">{display(meta.model)}</td>
-                <td className="px-2 py-1.5">{display(meta.fleet)}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
+      {/* Read-only table (compact, fixed widths, truncation) */}
+      <section className="border rounded-xl overflow-hidden">
+        <div className="px-3 py-2 font-semibold border-b text-sm leading-tight">Fleet Inventory</div>
+        <div className="overflow-auto">
+          <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col style={{ width: '90px' }} />   {/* Truck */}
+              <col style={{ width: '180px' }} />  {/* VIN */}
+              <col style={{ width: '150px' }} />  {/* ELD */}
+              <col style={{ width: '150px' }} />  {/* Camera */}
+              <col style={{ width: '70px' }} />   {/* Year */}
+              <col style={{ width: '120px' }} />  {/* Make */}
+              <col style={{ width: '130px' }} />  {/* Model */}
+              <col style={{ width: '160px' }} />  {/* Fleet */}
+            </colgroup>
+            <thead className="bg-gray-50 text-xs">
               <tr>
-                <td colSpan={8} className="px-2 py-3 text-xs text-gray-500">No rows match your filters.</td>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Truck</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">VIN</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">ELD Serial</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Camera Serial</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Year</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Make</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Model</th>
+                <th className="text-left px-2 py-1 whitespace-nowrap">Fleet Name</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="leading-tight">
+              {rows.map(({ truck, meta }) => (
+                <tr key={truck.id} className="border-t">
+                  <td className="px-2 py-1 font-medium whitespace-nowrap">{truck.number}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.vin || ''}>{display(meta.vin)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.eld || ''}>{display(meta.eld)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.camera || ''}>{display(meta.camera)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap">{meta.year ?? <span className="text-gray-400">—</span>}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.make || ''}>{display(meta.make)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.model || ''}>{display(meta.model)}</td>
+                  <td className="px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis" title={meta.fleet || ''}>{display(meta.fleet)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-2 py-2 text-xs text-gray-500">No rows match your filters.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   )
@@ -395,26 +368,20 @@ function applyParsedRows(
 
 /* ====================== Utilities ======================= */
 
-const vinKeys = ['vin', 'vehicle identification number', 'vehicle id number', 'vehicle id']
-const eldKeys = ['eld', 'eld serial', 'eld id', 'eld unit', 'eld number', 'peoplenet', 'omnitracs', 'geotab id']
-const camKeys = ['camera', 'camera serial', 'camera id', 'dashcam', 'cam serial', 'cam id']
-const yearKeys = ['year', 'model year', 'yr']
-const makeKeys = ['make', 'manufacturer']
+const vinKeys = ['vin','vehicle identification number','vehicle id number','vehicle id']
+const eldKeys = ['eld','eld serial','eld id','eld unit','eld number','peoplenet','omnitracs','geotab id']
+const camKeys = ['camera','camera serial','camera id','dashcam','cam serial','cam id']
+const yearKeys = ['year','model year','yr']
+const makeKeys = ['make','manufacturer']
 const modelKeys = ['model']
-const fleetKeys = ['fleet', 'fleet name', 'division', 'location']
-const truckKeys = ['truck number', 'truck', 'unit', 'vehicle', 'number', 'truck_no', 'unit number', 'truck id']
+const fleetKeys = ['fleet','fleet name','division','location']
+const truckKeys = ['truck number','truck','unit','vehicle','number','truck_no','unit number','truck id']
 
-function norm(s: string) {
-  return (s || '').trim().toLowerCase()
-}
-
-function headerMatches(nk: string, synonyms: string[]) {
-  return synonyms.some(sym => nk.includes(norm(sym)))
-}
+function norm(s: string) { return (s || '').trim().toLowerCase() }
+function headerMatches(nk: string, synonyms: string[]) { return synonyms.some(sym => nk.includes(norm(sym))) }
 
 function pickTruckCell(row: Record<string, any>): { key: string; value: string } | null {
   const keys = Object.keys(row)
-  // Prefer headers that look like truck/unit/vehicle
   for (const k of keys) {
     const nk = norm(k)
     if (headerMatches(nk, truckKeys)) {
@@ -422,7 +389,6 @@ function pickTruckCell(row: Record<string, any>): { key: string; value: string }
       if (val) return { key: k, value: val }
     }
   }
-  // Fallback: first ID-looking cell
   for (const k of keys) {
     const raw = String(row[k]).trim()
     if (raw && /^[A-Za-z0-9-]+$/.test(raw) && !/[,$]/.test(raw)) {
