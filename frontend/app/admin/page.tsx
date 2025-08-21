@@ -242,6 +242,11 @@ function AdminInner() {
         title="Truck Setup"
         subtitle="Add trucks & assign fleet"
         />
+        <TileButton
+        onClick={() => router.push('/admin/services')}
+        title="Service History"
+        subtitle="All service records • export"
+        />
       </div>
 
       {/* Quick Add User */}
