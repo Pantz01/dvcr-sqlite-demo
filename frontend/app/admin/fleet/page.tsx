@@ -21,14 +21,11 @@ type FleetMeta = {
   year?: number | null
   make?: string
   model?: string
-  key_code?: string
   fleet?: string
 }
 
-// Local storage key
 const LS_KEY = 'fleetMeta:v1'
 
-// A parsed row from an uploaded spreadsheet
 type ParsedRow = {
   truckNumber: string
   meta: FleetMeta
@@ -48,7 +45,6 @@ function FleetInner() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [trucks, setTrucks] = useState<Truck[]>([])
-  // meta keyed by truck number as displayed in your system
   const [metaByTruck, setMetaByTruck] = useState<Record<string, FleetMeta>>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,10 +54,6 @@ function FleetInner() {
   // UI state
   const [fleetFilter, setFleetFilter] = useState<string>('__all__')
   const [query, setQuery] = useState('')
-
-  // Row edit state
-  const [editing, setEditing] = useState<Record<number, boolean>>({})
-  const [draft, setDraft] = useState<Record<number, FleetMeta>>({})
 
   // Load trucks
   useEffect(() => {
@@ -86,7 +78,7 @@ function FleetInner() {
     } catch {}
   }, [])
 
-  // Derived: fleets (for filter)
+  // Derived: fleet names for filter
   const fleets = useMemo(() => {
     const set = new Set<string>()
     for (const v of Object.values(metaByTruck)) {
@@ -96,17 +88,14 @@ function FleetInner() {
     return Array.from(set).sort((a, b) => a.localeCompare(b))
   }, [metaByTruck])
 
-  // Display rows (sorted by truck #, filtered)
+  // Rows (sorted, filtered, searchable)
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
     return trucks
       .slice()
       .sort((a, b) => a.number.localeCompare(b.number))
-      .map(t => ({
-        truck: t,
-        meta: metaByTruck[t.number] || {},
-      }))
-      .filter(({ truck, meta }) => {
+      .map(t => ({ truck: t, meta: metaByTruck[t.number] || {} }))
+      .filter(({ meta, truck }) => {
         if (fleetFilter !== '__all__' && (meta.fleet || '') !== fleetFilter) return false
         if (!q) return true
         const hay = [
@@ -116,7 +105,6 @@ function FleetInner() {
           meta.camera,
           meta.make,
           meta.model,
-          meta.key_code,
           meta.fleet,
           String(meta.year ?? ''),
         ]
@@ -127,7 +115,7 @@ function FleetInner() {
       })
   }, [trucks, metaByTruck, fleetFilter, query])
 
-  /* ========== Import / Export / Save / Clear / Sync ========== */
+  /* ===== Import / Export / Save / Clear / Sync ===== */
 
   function triggerImport() {
     fileRef.current?.click()
@@ -179,7 +167,6 @@ function FleetInner() {
       'Year',
       'Make',
       'Model',
-      'Key Code',
       'Fleet Name',
     ]
     const lines = [headers.join(',')]
@@ -192,7 +179,6 @@ function FleetInner() {
         meta.year != null ? String(meta.year) : '',
         meta.make || '',
         meta.model || '',
-        meta.key_code || '',
         meta.fleet || '',
       ]
       lines.push(cells.map(csvCell).join(','))
@@ -205,7 +191,7 @@ function FleetInner() {
     URL.revokeObjectURL(a.href)
   }
 
-  // Optional: server sync (create this endpoint later if desired)
+  // Optional: backend sync (create /trucks/bulk-meta if desired)
   async function trySyncToServer() {
     try {
       const body = rows.map(({ truck, meta }) => ({
@@ -216,7 +202,6 @@ function FleetInner() {
         year: meta.year ?? null,
         make: meta.make ?? null,
         model: meta.model ?? null,
-        key_code: meta.key_code ?? null,
         fleet: meta.fleet ?? null,
       }))
       if (body.length === 0) {
@@ -242,51 +227,18 @@ function FleetInner() {
     }
   }
 
-  /* ========== Row edit helpers ========== */
-
-  function startEdit(tid: number, current: FleetMeta) {
-    setEditing(prev => ({ ...prev, [tid]: true }))
-    setDraft(prev => ({ ...prev, [tid]: { ...current } }))
-  }
-
-  function cancelEdit(tid: number, truckNo: string) {
-    setEditing(prev => ({ ...prev, [tid]: false }))
-    setDraft(prev => {
-      const next = { ...prev }
-      delete next[tid]
-      return next
-    })
-    // reset to saved
-    setMetaByTruck(prev => ({ ...prev }))
-  }
-
-  function saveRow(tid: number, truckNo: string) {
-    const d = draft[tid] || {}
-    setMetaByTruck(prev => ({
-      ...prev,
-      [truckNo]: scrubMeta(d),
-    }))
-    setEditing(prev => ({ ...prev, [tid]: false }))
-  }
-
-  /* ========== Render ========== */
+  /* ===== Render ===== */
 
   return (
     <main className="p-6 space-y-4">
-      {/* Header + LEFT-aligned actions */}
+      {/* Header + actions */}
       <div className="flex items-center flex-wrap gap-2">
         <h1 className="text-xl font-semibold">Fleet Information</h1>
         <div className="flex items-center gap-2">
           <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={triggerImport} title="Import CSV/XLSX">
             Import
           </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".csv,.xlsx,.xls"
-            className="hidden"
-            onChange={onFile}
-          />
+          <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={onFile} />
           <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={exportCsv} title="Download CSV">
             Export
           </button>
@@ -296,7 +248,7 @@ function FleetInner() {
           <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={clearLocal} title="Clear saved fleet info">
             Clear
           </button>
-          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={trySyncToServer} title="Try to POST to /trucks/bulk-meta">
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={trySyncToServer} title="Try POST /trucks/bulk-meta">
             Sync
           </button>
         </div>
@@ -336,139 +288,38 @@ function FleetInner() {
         </label>
       </div>
 
-      {/* Table (compact, scrollable, left-aligned) */}
+      {/* Read-only table */}
       <section className="border rounded-xl overflow-auto">
         <div className="px-3 py-2 font-semibold border-b text-sm">Fleet Inventory</div>
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-xs">
             <tr>
-              <th className="text-left px-2 py-1.5">Truck</th>
-              <th className="text-left px-2 py-1.5">VIN</th>
-              <th className="text-left px-2 py-1.5">ELD Serial</th>
-              <th className="text-left px-2 py-1.5">Camera Serial</th>
-              <th className="text-left px-2 py-1.5">Year</th>
-              <th className="text-left px-2 py-1.5">Make</th>
-              <th className="text-left px-2 py-1.5">Model</th>
-              <th className="text-left px-2 py-1.5">Key Code</th>
-              <th className="text-left px-2 py-1.5">Fleet Name</th>
-              <th className="text-left px-2 py-1.5">Actions</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Truck</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">VIN</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">ELD Serial</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Camera Serial</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Year</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Make</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Model</th>
+              <th className="text-left px-2 py-1.5 whitespace-nowrap">Fleet Name</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ truck, meta }) => {
-              const isEditing = !!editing[truck.id]
-              const d = isEditing ? (draft[truck.id] ?? meta) : meta
-              return (
-                <tr key={truck.id} className="border-t align-top">
-                  <td className="px-2 py-1.5 text-sm font-medium whitespace-nowrap">{truck.number}</td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-44 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.vin ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), vin: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-40 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.eld ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), eld: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-40 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.camera ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), camera: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      type="number"
-                      className={`border rounded-md px-2 py-1 text-sm w-24 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.year ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), year: toYear(e.target.value) } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-32 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.make ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), make: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-32 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.model ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), model: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-28 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      value={d.key_code ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), key_code: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5">
-                    <input
-                      className={`border rounded-md px-2 py-1 text-sm w-44 ${!isEditing ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                      readOnly={!isEditing}
-                      placeholder="e.g., 78 Cedar Falls"
-                      value={d.fleet ?? ''}
-                      onChange={(e)=> setDraft(prev => ({ ...prev, [truck.id]: { ...(prev[truck.id] ?? meta), fleet: e.target.value } }))}
-                    />
-                  </td>
-
-                  <td className="px-2 py-1.5 whitespace-nowrap">
-                    {!isEditing ? (
-                      <button
-                        className="px-2.5 py-1 text-[11px] border rounded-md"
-                        onClick={()=> startEdit(truck.id, meta)}
-                      >
-                        Edit
-                      </button>
-                    ) : (
-                      <div className="flex gap-1">
-                        <button
-                          className="px-2.5 py-1 text-[11px] border rounded-md"
-                          onClick={()=> cancelEdit(truck.id, truck.number)}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          className="px-2.5 py-1 text-[11px] border rounded-md bg-black text-white"
-                          onClick={()=> saveRow(truck.id, truck.number)}
-                        >
-                          Save
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
+            {rows.map(({ truck, meta }) => (
+              <tr key={truck.id} className="border-t align-top">
+                <td className="px-2 py-1.5 font-medium whitespace-nowrap">{truck.number}</td>
+                <td className="px-2 py-1.5">{display(meta.vin)}</td>
+                <td className="px-2 py-1.5">{display(meta.eld)}</td>
+                <td className="px-2 py-1.5">{display(meta.camera)}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap">{meta.year ?? <span className="text-gray-400">—</span>}</td>
+                <td className="px-2 py-1.5">{display(meta.make)}</td>
+                <td className="px-2 py-1.5">{display(meta.model)}</td>
+                <td className="px-2 py-1.5">{display(meta.fleet)}</td>
+              </tr>
+            ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-2 py-3 text-xs text-gray-500">
-                  No rows match your filters.
-                </td>
+                <td colSpan={8} className="px-2 py-3 text-xs text-gray-500">No rows match your filters.</td>
               </tr>
             )}
           </tbody>
@@ -514,10 +365,8 @@ function extractRows(wb: XLSX.WorkBook): ParsedRow[] {
     meta.year = toYear(pickString(row, yearKeys))
     meta.make = pickString(row, makeKeys)
     meta.model = pickString(row, modelKeys)
-    meta.key_code = pickString(row, keyKeys)
     meta.fleet = pickString(row, fleetKeys)
 
-    // If nothing was found besides truck, still record a blank meta row
     out.push({ truckNumber: truck.value, meta: scrubMeta(meta) })
   }
   return out
@@ -546,33 +395,14 @@ function applyParsedRows(
 
 /* ====================== Utilities ======================= */
 
-const vinKeys = [
-  'vin', 'vehicle identification number', 'vehicle id number', 'vehicle id'
-]
-const eldKeys = [
-  'eld', 'eld serial', 'eld id', 'eld unit', 'eld number', 'peoplenet', 'omnitracs', 'geotab id'
-]
-const camKeys = [
-  'camera', 'camera serial', 'camera id', 'dashcam', 'cam serial', 'cam id'
-]
-const yearKeys = [
-  'year', 'model year', 'yr'
-]
-const makeKeys = [
-  'make', 'manufacturer'
-]
-const modelKeys = [
-  'model'
-]
-const keyKeys = [
-  'key code', 'keycode', 'key', 'key #', 'key number'
-]
-const fleetKeys = [
-  'fleet', 'fleet name', 'division', 'location'
-]
-const truckKeys = [
-  'truck number', 'truck', 'unit', 'vehicle', 'number', 'truck_no', 'unit number', 'truck id'
-]
+const vinKeys = ['vin', 'vehicle identification number', 'vehicle id number', 'vehicle id']
+const eldKeys = ['eld', 'eld serial', 'eld id', 'eld unit', 'eld number', 'peoplenet', 'omnitracs', 'geotab id']
+const camKeys = ['camera', 'camera serial', 'camera id', 'dashcam', 'cam serial', 'cam id']
+const yearKeys = ['year', 'model year', 'yr']
+const makeKeys = ['make', 'manufacturer']
+const modelKeys = ['model']
+const fleetKeys = ['fleet', 'fleet name', 'division', 'location']
+const truckKeys = ['truck number', 'truck', 'unit', 'vehicle', 'number', 'truck_no', 'unit number', 'truck id']
 
 function norm(s: string) {
   return (s || '').trim().toLowerCase()
@@ -592,7 +422,7 @@ function pickTruckCell(row: Record<string, any>): { key: string; value: string }
       if (val) return { key: k, value: val }
     }
   }
-  // Fallback: first ID-looking cell (alphanum/hyphen, not currency/commas)
+  // Fallback: first ID-looking cell
   for (const k of keys) {
     const raw = String(row[k]).trim()
     if (raw && /^[A-Za-z0-9-]+$/.test(raw) && !/[,$]/.test(raw)) {
@@ -620,14 +450,12 @@ function toYear(v: any): number | null {
   const n = parseInt(s, 10)
   if (!Number.isFinite(n)) return null
   if (n >= 1980 && n <= 2100) return n
-  // handle strings like '2018.0'
   const n2 = parseInt(s.replace(/\D/g, ''), 10)
   if (Number.isFinite(n2) && n2 >= 1980 && n2 <= 2100) return n2
   return null
 }
 
 function scrubMeta(m: FleetMeta): FleetMeta {
-  // Remove empty strings and undefineds; keep null for year
   const copy: FleetMeta = {}
   if (m.vin) copy.vin = m.vin
   if (m.eld) copy.eld = m.eld
@@ -635,7 +463,6 @@ function scrubMeta(m: FleetMeta): FleetMeta {
   if (m.year != null) copy.year = m.year
   if (m.make) copy.make = m.make
   if (m.model) copy.model = m.model
-  if (m.key_code) copy.key_code = m.key_code
   if (m.fleet) copy.fleet = m.fleet
   return copy
 }
@@ -643,4 +470,8 @@ function scrubMeta(m: FleetMeta): FleetMeta {
 function csvCell(v: any) {
   const s = String(v ?? '')
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function display(v?: string) {
+  return v && v.trim() ? v : <span className="text-gray-400">—</span>
 }
