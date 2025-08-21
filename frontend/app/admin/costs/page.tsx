@@ -251,7 +251,7 @@ function CostsInner() {
               <tr>
                 <td colSpan={2} className="px-2 py-3 text-right">
                   <span className="text-sm text-gray-700 mr-2">YTD Total:</span>
-                  <span className="text-xl font-extrabold">${fmtMoney(totalCost)}</span>
+                  <span className="text-lg font-extrabold">${fmtMoney(totalCost)}</span>
                 </td>
               </tr>
             </tfoot>
