@@ -1,3 +1,4 @@
+// app/admin/trucks/page.tsx
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -5,7 +6,7 @@ import RequireAuth from '@/components/RequireAuth'
 import RoleGuard from '@/components/RoleGuard'
 import { API, authHeaders, jsonHeaders } from '@/lib/api'
 import { useRouter } from 'next/navigation'
-import * as XLSX from 'xlsx' // ⬅️ keep
+import * as XLSX from 'xlsx' // keep
 
 // ---- date helper (M-D-YYYY, no leading zeros) ----
 function formatDateMDY(input?: string | number | Date | null) {
@@ -31,10 +32,13 @@ type PM = {
   chassis_miles_remaining: number
 }
 
+// ✨ Expanded service types
+type ServiceType = 'oil' | 'chassis' | 'general' | 'major' | 'driver'
+
 type Service = {
   id: number
   truck_id: number
-  service_type: 'oil' | 'chassis'
+  service_type: ServiceType
   odometer: number
   notes?: string | null
   created_at: string
@@ -150,7 +154,8 @@ function AdminTrucksInner() {
     setIsEditing(false)
   }
 
-  async function addService(truck: Truck, service_type: 'oil' | 'chassis', odometer: number, notes: string) {
+  // ✨ accept expanded service types
+  async function addService(truck: Truck, service_type: ServiceType, odometer: number, notes: string) {
     setBusy(true)
     const r = await fetch(`${API}/trucks/${truck.id}/service`, {
       method: 'POST',
@@ -254,8 +259,6 @@ function AdminTrucksInner() {
                     VIN {t.vin || '—'} · Odo {t.odometer ?? 0} · {t.active ? 'Active' : 'Inactive'}
                   </div>
                 </button>
-
-                {/* ⛔ Removed per-row 'View Reports' link */}
               </div>
             ))}
             {trucks.length === 0 && (
@@ -279,7 +282,6 @@ function AdminTrucksInner() {
                   Export Alerts
                 </button>
                 <ExportAllIssuesButton />
-                {/* ⛔ Moved View Issues + Edit controls out of header */}
               </div>
             </div>
 
@@ -331,7 +333,7 @@ function AdminTrucksInner() {
                     </Labeled>
                   </div>
 
-                  {/* ⬇️ Button row moved LEFT, above PM Status */}
+                  {/* Button row moved LEFT, above PM Status */}
                   <div className="flex flex-wrap items-center gap-2">
                     {selected && (
                       <button
@@ -384,7 +386,7 @@ function AdminTrucksInner() {
                     )}
                   </div>
 
-                  {/* Add service — slimmed */}
+                  {/* ✨ Add service — slimmed + expanded types */}
                   <AddServiceCard
                     busy={busy}
                     onAdd={(svc, odo, notes) => selected && addService(selected, svc, odo, notes)}
@@ -396,7 +398,7 @@ function AdminTrucksInner() {
                     <div className="max-h-[40vh] overflow-auto divide-y">
                       {services.map(s => (
                         <div key={s.id} className="p-3 flex items-center gap-3">
-                          <div className="w-20 uppercase text-xs">{s.service_type}</div>
+                          <div className="w-32 uppercase text-xs">{s.service_type}</div>
                           <div className="flex-1 text-sm">
                             Odo {s.odometer} · {formatDateMDY(s.created_at)}
                             {s.notes ? <span className="text-gray-600"> · {s.notes}</span> : null}
@@ -446,9 +448,9 @@ function AddServiceCard({
   onAdd,
 }: {
   busy: boolean
-  onAdd: (t: 'oil' | 'chassis', odo: number, notes: string) => void
+  onAdd: (t: ServiceType, odo: number, notes: string) => void
 }) {
-  const [svc, setSvc] = useState<'oil' | 'chassis'>('oil')
+  const [svc, setSvc] = useState<ServiceType>('oil')
   const [odo, setOdo] = useState<number>(0)
   const [notes, setNotes] = useState('')
 
@@ -459,10 +461,13 @@ function AddServiceCard({
         <select
           className="border p-1.5 rounded-lg text-sm"
           value={svc}
-          onChange={(e) => setSvc(e.target.value as 'oil' | 'chassis')}
+          onChange={(e) => setSvc(e.target.value as ServiceType)}
         >
-          <option value="oil">oil</option>
-          <option value="chassis">chassis</option>
+          <option value="oil">Oil</option>
+          <option value="chassis">Chassis</option>
+          <option value="general">General Maintenance</option>
+          <option value="major">Major Repairs</option>
+          <option value="driver">Driver Damage</option>
         </select>
 
         <input
@@ -539,7 +544,7 @@ function ExportAllIssuesButton() {
     const lines: string[] = []
     lines.push(headers.join(','))
     if (rows.length === 0) {
-      lines.push([ '', '', '', '' ].join(','))
+      lines.push(['', '', '', ''].join(','))
     } else {
       for (const row of rows) {
         lines.push(headers.map(h => escapeCell(row[h])).join(','))
@@ -555,7 +560,7 @@ function ExportAllIssuesButton() {
       // 1) Get all trucks
       const trucksRes = await fetch(`${API}/trucks`, { headers: authHeaders() })
       if (!trucksRes.ok) throw new Error(await trucksRes.text())
-      const trucks: { id:number; number:string }[] = await trucksRes.json()
+      const trucks: { id: number; number: string }[] = await trucksRes.json()
 
       // 2) For each truck, fetch reports (paged) and flatten defects
       const allRows: Record<string, any>[] = []
