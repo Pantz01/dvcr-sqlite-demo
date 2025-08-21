@@ -212,7 +212,7 @@ function FleetInner() {
   /* ===== Render ===== */
 
   return (
-    <main className="p-6 space-y-4 max-w-4xl mx-auto">
+    <main className="p-6 space-y-4 max-w-6xl">
       {/* Header + actions (compact) */}
       <div className="flex items-center flex-wrap gap-2 leading-tight">
         <h1 className="text-lg font-semibold">Fleet Information</h1>
@@ -252,17 +252,17 @@ function FleetInner() {
       {/* Read-only table (compact, fixed widths, truncation) */}
       <section className="border rounded-xl overflow-hidden">
         <div className="px-3 py-2 font-semibold border-b text-sm leading-tight">Fleet Inventory</div>
-        <div className="overflow-auto">
+        <div>
           <table className="w-full text-sm table-fixed">
             <colgroup>
-              <col style={{ width: '90px' }} />   {/* Truck */}
-              <col style={{ width: '180px' }} />  {/* VIN */}
-              <col style={{ width: '150px' }} />  {/* ELD */}
-              <col style={{ width: '150px' }} />  {/* Camera */}
-              <col style={{ width: '70px' }} />   {/* Year */}
-              <col style={{ width: '120px' }} />  {/* Make */}
-              <col style={{ width: '130px' }} />  {/* Model */}
-              <col style={{ width: '160px' }} />  {/* Fleet */}
+              <col style={{ width: '90px' }} />    {/* Truck */}
+              <col style={{ width: '200px' }} />   {/* VIN */}
+              <col style={{ width: '170px' }} />   {/* ELD */}
+              <col style={{ width: '170px' }} />   {/* Camera */}
+              <col style={{ width: '80px' }} />    {/* Year */}
+              <col style={{ width: '130px' }} />   {/* Make */}
+              <col style={{ width: '150px' }} />   {/* Model */}
+              <col style={{ width: '190px' }} />   {/* Fleet */}
             </colgroup>
             <thead className="bg-gray-50 text-xs">
               <tr>
