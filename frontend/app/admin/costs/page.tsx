@@ -42,7 +42,7 @@ function CostsInner() {
   const [unmatchedCount, setUnmatchedCount] = useState(0)
   const [lastImport, setLastImport] = useState<string | null>(null)
 
-  // Load trucks for display order / names
+  // Load trucks
   useEffect(() => {
     ;(async () => {
       setError(null)
@@ -62,7 +62,7 @@ function CostsInner() {
     try {
       const raw = localStorage.getItem(LS_KEY)
       if (raw) setYtdByTruckNo(JSON.parse(raw))
-    } catch { /* ignore */ }
+    } catch {}
   }, [])
 
   const totalCost = useMemo(
@@ -71,7 +71,6 @@ function CostsInner() {
   )
 
   const rowsForDisplay = useMemo(() => {
-    // Show all trucks; if a truck has no cost, display blank
     return trucks
       .slice()
       .sort((a, b) => a.number.localeCompare(b.number))
@@ -82,9 +81,7 @@ function CostsInner() {
       }))
   }, [trucks, ytdByTruckNo])
 
-  /* =====================
-     Import (compact UI)
-     ===================== */
+  /* ===== Import (compact) ===== */
   function triggerImport() {
     fileRef.current?.click()
   }
@@ -105,13 +102,11 @@ function CostsInner() {
       setError(err?.message ?? 'Failed to parse file')
     } finally {
       setLoading(false)
-      e.target.value = '' // reset
+      e.target.value = ''
     }
   }
 
-  /* =====================
-     Actions
-     ===================== */
+  /* ===== Actions ===== */
   function saveLocal() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(ytdByTruckNo))
@@ -130,15 +125,12 @@ function CostsInner() {
   }
 
   function exportNormalizedCsv() {
-    // Export displayed trucks (stable order) + YTD TOTAL line
     const headers = ['Truck Number', 'YTD Cost']
     const lines = [headers.join(',')]
 
     for (const r of rowsForDisplay) {
       const val =
-        typeof r.cost === 'number' && Number.isFinite(r.cost)
-          ? r.cost.toFixed(2)
-          : ''
+        typeof r.cost === 'number' && Number.isFinite(r.cost) ? r.cost.toFixed(2) : ''
       lines.push(`${csvCell(r.number)},${val}`)
     }
 
@@ -153,8 +145,6 @@ function CostsInner() {
     URL.revokeObjectURL(a.href)
   }
 
-  // Optional: If you add a backend endpoint, this will try to sync
-  // Expected body: [{ truck_id, ytd_cost }]
   async function trySyncToServer() {
     try {
       const byId: { truck_id: number; ytd_cost: number }[] = []
@@ -187,15 +177,11 @@ function CostsInner() {
 
   return (
     <main className="p-6 space-y-4">
-      {/* Header + compact actions */}
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Maintenance Cost Tracker (YTD)</h1>
+      {/* Header with LEFT-aligned actions */}
+      <div className="flex items-center flex-wrap gap-2">
+        <h1 className="text-xl font-semibold">Maintenance Costs</h1>
         <div className="flex items-center gap-2">
-          <button
-            className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={triggerImport}
-            title="Import CSV/XLSX"
-          >
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={triggerImport} title="Import CSV/XLSX">
             Import
           </button>
           <input
@@ -205,32 +191,16 @@ function CostsInner() {
             className="hidden"
             onChange={onFile}
           />
-          <button
-            className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={exportNormalizedCsv}
-            title="Download CSV"
-          >
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={exportNormalizedCsv} title="Download CSV">
             Export
           </button>
-          <button
-            className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={saveLocal}
-            title="Save to this browser"
-          >
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={saveLocal} title="Save to this browser">
             Save
           </button>
-          <button
-            className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={clearLocal}
-            title="Clear saved YTD costs"
-          >
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={clearLocal} title="Clear saved YTD costs">
             Clear
           </button>
-          <button
-            className="px-2.5 py-1 text-[11px] border rounded-md"
-            onClick={trySyncToServer}
-            title="Try to POST to /costs/bulk-ytd"
-          >
+          <button className="px-2.5 py-1 text-[11px] border rounded-md" onClick={trySyncToServer} title="Try to POST to /costs/bulk-ytd">
             Sync
           </button>
         </div>
@@ -276,11 +246,12 @@ function CostsInner() {
                 </tr>
               )}
             </tbody>
-            {/* Right-aligned single-line total */}
-            <tfoot className="bg-gray-50 text-xs">
+            {/* Big, bold YTD Total */}
+            <tfoot className="bg-gray-50">
               <tr>
-                <td colSpan={2} className="px-2 py-2 text-right font-semibold">
-                  YTD Total: ${fmtMoney(totalCost)}
+                <td colSpan={2} className="px-2 py-3 text-right">
+                  <span className="text-sm text-gray-700 mr-2">YTD Total:</span>
+                  <span className="text-xl font-extrabold">${fmtMoney(totalCost)}</span>
                 </td>
               </tr>
             </tfoot>
@@ -291,14 +262,11 @@ function CostsInner() {
   )
 }
 
-/* =============== parsing helpers (smart + compact) =============== */
+/* =============== parsing helpers =============== */
 
 async function parseFileSmart(file: File): Promise<ParsedRow[]> {
-  // 1) Try ArrayBuffer (works for xlsx/xls/csv)
   const parsedFromArray = await tryParseArrayBuffer(file).catch(() => [] as ParsedRow[])
   if (parsedFromArray.length > 0) return parsedFromArray
-
-  // 2) Fallback: read as text (some CSVs parse better this way)
   const parsedFromText = await tryParseText(file).catch(() => [] as ParsedRow[])
   return parsedFromText
 }
@@ -318,7 +286,6 @@ async function tryParseText(file: File): Promise<ParsedRow[]> {
 function extractRowsFromWorkbook(wb: XLSX.WorkBook): ParsedRow[] {
   const ws = wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<Record<string, any>>(ws, { defval: '' })
-
   const parsed: ParsedRow[] = []
   for (const row of rows) {
     const t = pickTruckCell(row)
@@ -376,11 +343,11 @@ function fmtMoney(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-/* ---- smarter detection helpers (avoids mixing truck # as cost) ---- */
+/* ---- smarter detection helpers ---- */
 
 function pickTruckCell(row: Record<string, any>): { key: string; value: string } | null {
   const keys = Object.keys(row)
-  // 1) Prefer headers that look like truck/unit/vehicle
+  // Prefer headers that look like truck/unit/vehicle
   for (const k of keys) {
     const nk = norm(k)
     if (/(^|[^a-z])(truck|unit|vehicle)([^a-z]|$)/.test(nk)) {
@@ -388,7 +355,7 @@ function pickTruckCell(row: Record<string, any>): { key: string; value: string }
       if (val) return { key: k, value: val }
     }
   }
-  // 2) Next: generic "number"/"id"/"no"
+  // Next: generic "number"/"id"/"no"
   for (const k of keys) {
     const nk = norm(k)
     if (/(^|[^a-z])(number|id|no\.?)([^a-z]|$)/.test(nk)) {
@@ -396,7 +363,7 @@ function pickTruckCell(row: Record<string, any>): { key: string; value: string }
       if (val) return { key: k, value: val }
     }
   }
-  // 3) Fallback: first ID-looking cell (alphanum/hyphen, not currency)
+  // Fallback: first ID-looking cell (alphanum/hyphen, not currency)
   for (const k of keys) {
     const raw = String(row[k]).trim()
     if (raw && /^[A-Za-z0-9-]+$/.test(raw) && !/[,$]/.test(raw)) {
@@ -414,10 +381,10 @@ function pickCostCell(
   const keys = Object.keys(row).filter(k => k !== truckKey)
   const truckNum = parseMoney(truckVal)
 
-  // 1) Strong header match: "ytd" plus ("cost" or "total" or "amount")
+  // Strong header match: "ytd" plus ("cost" | "total" | "amount")
   for (const k of keys) {
     const nk = norm(k)
-    const hasYtd = /\bytd\b/.test(nk) || nk.includes('year') // e.g. "year to date"
+    const hasYtd = /\bytd\b/.test(nk) || nk.includes('year')
     const hasMoneyWord = /\bcost\b/.test(nk) || /\btotal\b/.test(nk) || /\bamount\b/.test(nk)
     if (hasYtd && hasMoneyWord) {
       const n = parseMoney(row[k])
@@ -425,7 +392,7 @@ function pickCostCell(
     }
   }
 
-  // 2) Any header with money word (not the truck column)
+  // Any header with money word
   for (const k of keys) {
     const nk = norm(k)
     if (/\bcost\b|\bamount\b|\btotal\b/.test(nk)) {
@@ -434,7 +401,7 @@ function pickCostCell(
     }
   }
 
-  // 3) Cells that look like currency (contain $ or comma)
+  // Currency-looking cell
   for (const k of keys) {
     const raw = String(row[k])
     if (/[,$]/.test(raw)) {
@@ -443,7 +410,7 @@ function pickCostCell(
     }
   }
 
-  // 4) Last resort: choose the largest numeric value that isn't the truck value
+  // Largest numeric value that isn't the truck number
   let best: number | null = null
   for (const k of keys) {
     const n = parseMoney(row[k])
